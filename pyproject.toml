@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "video-integrity-intelligence"
+version = "1.0.0"
+description = "Evidence-first video intelligence platform (Meta-native video + web intelligence)"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "openai>=1.30",
+    "httpx>=0.27",
+    "python-multipart>=0.0.18",
+    "Pillow>=10.0",
+    "imagehash>=4.3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.5"]
+desktop = ["PySide6>=6.7", "keyring>=24"]
+
+[project.scripts]
+vii = "vii.main:main"
+vii-api = "vii.api.app:run"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]  # line length handled by formatter config; keep noise low
