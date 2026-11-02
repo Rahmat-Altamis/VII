@@ -83,6 +83,18 @@ Ingestion never downloads media, creates analyses, or calls a model.
 4. Compare persisted JSON reports against dataset labels offline; keep
    labels (`labels_json`, human-reviewed) separate from model output.
 
+## Synthetic beta benchmark (separate from this inbox)
+
+`datasets/synthetic_beta_v0.1.jsonl` is a fully synthetic, 30-case
+benchmark *template* (fictional claims, expected assessment behaviour, no
+media, no sources). It is validated by `vii.dataset.benchmark`
+(`load_benchmark`, extending this package and reusing its line-error
+style) — **not** by `validate_csv`, and it must never be ingested through
+the Dataset Inbox above. See `datasets/README.md` for the schema, the
+ClaimStatus-based label adaptations, and the synthetic-vs-real
+distinction. It measures template agreement only, never real-world
+detection accuracy.
+
 ## Tests
 
 `tests/test_dataset_ingestion.py` covers: missing-file normal state, valid
