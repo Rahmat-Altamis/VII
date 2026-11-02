@@ -39,9 +39,9 @@ def store_api_key(api_key: str, data_dir: Path) -> str:
     fp.write_text(json.dumps({"meta_api_key": api_key}))
     try:
         fp.chmod(0o600)
-        except OSError:
-            pass
-        return "fallback-file (mode 0600, VII_DATA_DIR/.keyring-fallback.json)"
+    except OSError:
+        pass
+    return "fallback-file (mode 0600, VII_DATA_DIR/.keyring-fallback.json)"
 
 
 def load_api_key(data_dir: Path) -> str:
