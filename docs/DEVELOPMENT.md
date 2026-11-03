@@ -5,10 +5,18 @@
 ```bash
 cd video-integrity-intelligence
 python3.12 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"          # API + tests + Ruff; add ,desktop for PySide6 UI
+pip install -e .                 # core library only (import vii, local ops)
+pip install -e ".[dev]"          # full app + API + tests + Ruff; add ,desktop for PySide6 UI
 cp .env.example .env             # set MODEL_API_KEY for real (online-first) analysis
 which ffmpeg ffprobe             # media tools (required for local-file probing)
 ```
+
+Library consumers need only the core install plus the extras for the
+features they use (`.[api]`, `.[db]`, `.[provider]`, `.[media]`, or
+`.[app]` for all of them; see `pyproject.toml`). Basic library usage
+(`from vii import VII`; `inspect_media`, `sha256`,
+`assess_originality`, `validate_dataset`) requires no deployed server,
+database, or background worker.
 
 ## Run
 

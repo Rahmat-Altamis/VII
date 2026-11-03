@@ -41,4 +41,4 @@ def assess_originality(media_path: str | Path, corpus_dir: str | Path | None,
              f"{len(matches)} near-duplicate frame(s) in corpus." if matches else
              "No exact or near duplicates in the local comparison corpus.")
     return OriginalityResult(sha256=digest, exact_duplicate_of=exact,
-                             phash_matches=matches[:20], notes=notes)
+                             phash_matches=matches[:20], phashes=hashes, notes=notes)

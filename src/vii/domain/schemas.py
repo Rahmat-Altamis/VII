@@ -1,13 +1,12 @@
 """Pydantic data contracts. No Qt / SQLAlchemy / HTTP imports allowed here."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Literal
+from datetime import UTC, datetime
+from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from vii.domain.enums import (
-    AcquisitionMethod,
     ClaimKind,
     ClaimStatus,
     JobStatus,
@@ -107,7 +106,7 @@ class SearchResultItem(BaseModel):
     title: str = ""
     snippet: str = ""
     publisher: str = ""
-    retrieved_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    retrieved_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     search_response_id: str = ""
     method: SearchMethod = SearchMethod.META_WEB_SEARCH
 
@@ -133,16 +132,66 @@ class ClaimAssessmentIn(BaseModel):
     limitations: str = ""
     method: str = "meta_web_search"
 
-    @field_validator("status")
-    @classmethod
-    def _needs_evidence(cls, v: ClaimStatus, info) -> ClaimStatus:
-        data = info.data if hasattr(info, "data") else {}
-        if v in (ClaimStatus.SUPPORTED, ClaimStatus.CONTRADICTED):
-            if not data.get("evidence_urls"):
-                raise ValueError(f"{v} requires at least one evidence URL")
-            if not (data.get("explanation") or "").strip():
-                raise ValueError(f"{v} requires an explanation")
-        return v
+    @model_validator(mode="after")
+    def _needs_evidence(self) -> ClaimAssessmentIn:
+        # Model-level (not field-level) validation: a field validator on
+        # ``status`` runs before ``evidence_urls``/``explanation`` are
+        # parsed in Pydantic v2, so it could never see them and made
+        # SUPPORTED/CONTRADICTED impossible to construct at all.
+        if self.status in (ClaimStatus.SUPPORTED, ClaimStatus.CONTRADICTED):
+            if not self.evidence_urls:
+                raise ValueError(
+                    f"{self.status} requires at least one evidence URL")
+            if not (self.explanation or "").strip():
+                raise ValueError(f"{self.status} requires an explanation")
+        return self
+
+
+class MediaIngestionResult(BaseModel):
+    """Result of ingestion-only validation (no job, no provider call).
+
+    Produced by ``vii.media.ingestion.inspect_local_media``: the file was
+    validated, signature-checked and hashed locally. ``duration_s`` is None
+    when no local method could determine it — never guessed.
+    """
+
+    storage_ref: str
+    sha256: str
+    size_bytes: int
+    size_mb: float
+    extension: str
+    container: str = "unknown"
+    signature_ok: bool = False
+    duration_s: float | None = None
+    duration_source: str = "unknown"  # mp4_mvhd | ffprobe | unknown
+    has_audio: bool | None = None
+    native_video_ready: bool = False
+    needs_conversion: bool = False
+    limitations: list[str] = Field(default_factory=list)
+
+
+class VisualObservation(BaseModel):
+    """One provider-reported visual observation (not a factual finding).
+
+    Optional fields stay None when the provider does not supply them;
+    they are never filled by inference. Produced only by a real visual
+    perception adapter — see vii.providers.visual.
+    """
+
+    observation_id: str = ""
+    asset_id: str = ""
+    provider: str = ""
+    model: str = ""
+    timestamp_ms: int | None = None
+    frame_index: int | None = None
+    observation_type: str = "detection"
+    object_id: str | None = None
+    label: str = ""
+    description: str = ""
+    geometry: dict[str, Any] | None = None
+    mask_ref: str | None = None
+    request_id: str = ""
+    sampling_mode: str = "native_video"
 
 
 class MediaOrigin(BaseModel):
@@ -156,7 +205,40 @@ class OriginalityResult(BaseModel):
     sha256: str = ""
     exact_duplicate_of: str | None = None
     phash_matches: list[dict[str, Any]] = Field(default_factory=list)
+    phashes: list[str] = Field(default_factory=list)
     notes: str = ""
+
+
+class ForensicSignal(BaseModel):
+    """One evaluated manipulation-forensics signal (not a verdict)."""
+
+    name: str
+    status: str  # signal | no_signal | unavailable
+    detail: str = ""
+    value: float | None = None
+
+
+class DeepfakeAssessment(BaseModel):
+    """Manipulation-forensics result: categorical signals, never a
+    fake/real verdict and never a fabricated probability.
+
+    ``status`` is ``signals_detected`` when at least one signal fired,
+    ``no_signals_detected`` when signals were evaluated and none fired,
+    or ``unavailable`` when nothing could be evaluated locally. Individual
+    signals are weak proxies (documented per signal); only a human
+    reviewer with provenance records can conclude manipulation.
+    """
+
+    status: str = "unavailable"
+    signals: list[ForensicSignal] = Field(default_factory=list)
+    detector_used: str = (
+        "local forensic signal ensemble (frame reuse, recompression "
+        "error, temporal transitions, provenance sparsity) — no "
+        "synthetic-media classifier was run")
+    limitations: str = (
+        "Signals are weak local proxies, not proof of manipulation or "
+        "authenticity; platform re-encoding and ordinary editing fire "
+        "several of them on genuine media.")
 
 
 class JobProgress(BaseModel):
@@ -164,13 +246,13 @@ class JobProgress(BaseModel):
     status: JobStatus
     stage: StageName | None = None
     message: str = ""
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class ReportPayload(BaseModel):
     job_id: str
     title: str
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     dimensions: dict[str, Any] = Field(default_factory=dict)
     claims: list[dict[str, Any]] = Field(default_factory=list)
     sources: list[dict[str, Any]] = Field(default_factory=list)

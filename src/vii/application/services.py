@@ -72,6 +72,8 @@ class AnalysisService:
     def diagnostics(self) -> dict:
         import shutil
         s = self.settings
+        from vii.providers.capabilities import provider_capabilities
         return {"settings": s.redacted(), "live_mode": s.live_mode,
                 "ffmpeg": shutil.which(s.ffmpeg_bin) is not None,
-                "ffprobe": shutil.which(s.ffprobe_bin) is not None}
+                "ffprobe": shutil.which(s.ffprobe_bin) is not None,
+                "capabilities": provider_capabilities(s)}

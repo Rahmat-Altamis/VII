@@ -98,6 +98,26 @@ class AnalysisRepo:
             return json.loads(row.payload_json or "{}")
         except Exception:
             return None
+    def clear_job_artifacts(self, job_id: str) -> None:
+        """Remove partial per-job outputs so a job can be re-run safely.
+
+        A run that failed midway (worker retry, manual re-run) must not
+        collide with its own earlier claims (job-scoped primary keys),
+        evidence, transcripts, or reports. Processing logs and the job
+        row itself are preserved for audit.
+        """
+        claim_ids = [c.id for c in
+                     self.s.query(Claim).filter_by(job_id=job_id).all()]
+        if claim_ids:
+            (self.s.query(ClaimAssessment)
+             .filter(ClaimAssessment.claim_id.in_(claim_ids)).delete(
+                 synchronize_session=False))
+        for model in (VideoSource, MetaRequest, Claim, EvidenceSource,
+                      Citation, TranscriptSegmentRow, SearchSession, ReportRow):
+            (self.s.query(model).filter_by(job_id=job_id)
+             .delete(synchronize_session=False))
+        self.s.commit()
+
     def claims_for_job(self, job_id: str) -> list[Claim]:
         return self.s.query(Claim).filter_by(job_id=job_id).all()
     def evidence_for_job(self, job_id: str) -> list[EvidenceSource]:

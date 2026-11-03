@@ -1,5 +1,6 @@
 """Entry points: `vii` (desktop), `vii --api` (server), `vii --demo` (explicit synthetic demo),
-`vii --validate-dataset [PATH]`, `vii --ingest-dataset [PATH] [--apply]`."""
+`vii --validate-dataset [PATH]`, `vii --ingest-dataset [PATH] [--apply]`,
+`vii --ingest-only PATH` (local media validation; no job, no provider)."""
 from __future__ import annotations
 
 import sys
@@ -25,6 +26,12 @@ def main(argv: list[str] | None = None) -> int:
         i = argv.index("--ingest-dataset")
         path = argv[i + 1] if i + 1 < len(argv) and not argv[i + 1].startswith("--") else None
         return ingest_dataset(path, apply="--apply" in argv)
+    if "--ingest-only" in argv:
+        i = argv.index("--ingest-only")
+        if i + 1 >= len(argv) or argv[i + 1].startswith("--"):
+            print("usage: vii --ingest-only PATH")
+            return 2
+        return ingest_only(argv[i + 1])
     if "--demo" in argv:
         return demo()
     from vii.ui.main_window import run_app
@@ -62,6 +69,30 @@ def ingest_dataset(path: str | None = None, apply: bool = False) -> int:
                         s.consumer_id or "default", dry_run=not apply)
     print(_json.dumps(result.as_dict(), indent=2))
     return 0 if result.report.ok else 2
+
+
+def ingest_only(path: str) -> int:
+    """Validate + hash one local media file. Exit 0 = valid, 2 = rejected.
+
+    Ingestion-only by construction: no database is opened, no analysis job
+    is created, no worker is enqueued, and no provider module is imported.
+    Prints the MediaIngestionResult (or the typed rejection) as JSON.
+    """
+    import json as _json
+
+    from vii.config import get_settings
+    from vii.media.ingestion import inspect_local_media
+
+    try:
+        s = get_settings()
+        result = inspect_local_media(path, s.max_upload_mb, s.max_video_seconds,
+                                     s.ffprobe_bin)
+    except ValueError as e:
+        print(_json.dumps({"ok": False, "error": type(e).__name__,
+                           "message": str(e)}, indent=2))
+        return 2
+    print(_json.dumps({"ok": True, **result.model_dump()}, indent=2))
+    return 0
 
 
 def demo() -> int:

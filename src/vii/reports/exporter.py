@@ -11,11 +11,13 @@ DIMENSIONS = ["claim_verification", "supporting_contradicting_evidence",
 
 def build_payload(job_id: str, title: str, dimensions: dict, claims: list[dict],
                   sources: list[dict], errors: list[dict],
-                  limitations: list[str], offline: bool) -> dict:
+                  limitations: list[str], offline: bool,
+                  metadata: dict | None = None) -> dict:
     return {"job_id": job_id, "title": title,
             "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "dimensions": dimensions, "claims": claims, "sources": sources,
-            "errors": errors, "limitations": limitations, "offline": offline}
+            "errors": errors, "limitations": limitations, "offline": offline,
+            "metadata": metadata or {}}
 
 
 def to_markdown(p: dict) -> str:
@@ -25,6 +27,10 @@ def to_markdown(p: dict) -> str:
         d = p["dimensions"].get(dim, {})
         L.append(f"\n## {dim.replace('_',' ').title()}\n")
         L.append(d if isinstance(d, str) else json.dumps(d, indent=2, default=str))
+    metadata = p.get("metadata") or {}
+    if metadata:  # operational metadata: explicitly not a sixth dimension
+        L.append("\n## Operational Metadata\n")
+        L.append(json.dumps(metadata, indent=2, default=str))
     L.append("\n## Claims\n")
     for c in p["claims"]:
         L.append(f"- **{c.get('status','?')}** · {c.get('text','')} "

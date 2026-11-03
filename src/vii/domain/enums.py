@@ -60,6 +60,7 @@ class SearchMethod(StrEnum):
 class StageName(StrEnum):
     INGESTION = "ingestion"
     VIDEO_UNDERSTANDING = "video_understanding"
+    VISUAL_PERCEPTION = "visual_perception"
     TRANSCRIPTION = "transcription"
     CLAIM_EXTRACTION = "claim_extraction"
     WEB_SEARCH = "web_search"

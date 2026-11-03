@@ -19,7 +19,13 @@ from urllib.parse import urlparse
 
 import vii.media.ffmpeg as ffmpeg_mod
 from vii.domain.enums import AcquisitionMethod, SourceKind
-from vii.domain.schemas import VideoSourceIn
+from vii.domain.schemas import MediaIngestionResult, VideoSourceIn
+from vii.errors import (
+    InvalidUploadError,
+    MediaDurationExceededError,
+    UnsupportedMediaError,
+    UploadTooLargeError,
+)
 
 SUPPORTED_EXTS = {".mp4"}
 CONVERTIBLE_EXTS = {".mkv", ".mov", ".webm", ".avi", ".m4v"}
@@ -78,3 +84,120 @@ def ensure_mp4(src_path: str | Path, storage: Path, ffmpeg_bin: str,
     from vii.media.hashing import sha256_file
     ffmpeg_mod.convert_to_mp4(src, dst, ffmpeg_bin)
     return dst, True, sha256_file(dst)
+
+
+# -- Ingestion-only inspection (no job, no worker, no provider) ------------
+#
+# This path deliberately imports no provider, pipeline, worker, or
+# persistence module: validating media must be testable without credentials
+# and must never spend provider credits. FFmpeg/ffprobe are optional
+# enrichment only — a supported native MP4 is fully validated without them.
+
+_EXT_CONTAINER = {
+    ".mp4": "mp4", ".m4v": "mp4", ".mov": "mov",
+    ".mkv": "mkv", ".webm": "webm", ".avi": "avi",
+}
+# Signature families: an .mkv and a .webm share the EBML header, and an
+# .m4v is an MP4 brand — family match is what the signature can prove.
+_CONTAINER_FAMILY = {
+    "mp4": "mp4", "mov": "mp4", "mkv": "ebml", "webm": "ebml", "avi": "avi",
+}
+
+
+def sniff_container(path: str | Path) -> str:
+    """Identify a container from magic bytes (not the file name).
+
+    Returns mp4 | mov | mkv | webm | avi | unknown. Never raises.
+    """
+    try:
+        with open(path, "rb") as f:
+            head = f.read(32)
+    except OSError:
+        return "unknown"
+    if len(head) >= 8 and head[4:8] == b"ftyp":
+        brand = head[8:12].decode("latin-1", "replace").strip().lower()
+        return "mov" if brand in ("qt",) else "mp4"
+    if head[:4] == b"\x1a\x45\xdf\xa3":  # EBML: Matroska vs WebM by DocType
+        return "webm" if b"webm" in head else "mkv"
+    if len(head) >= 12 and head[:4] == b"RIFF" and head[8:12] == b"AVI ":
+        return "avi"
+    return "unknown"
+
+
+def inspect_local_media(path: str | Path, max_mb: int = 512,
+                        max_seconds: int = 3600,
+                        ffprobe_bin: str | None = None) -> MediaIngestionResult:
+    """Validate + hash a local media file without any analysis side effects.
+
+    Raises InvalidUploadError / UploadTooLargeError /
+    UnsupportedMediaError / MediaDurationExceededError (all ValueErrors)
+    with explicit messages. Duration comes from the pure-Python MP4 parser
+    first; ffprobe is used only when a binary name is supplied, the tool is
+    installed, and the MP4 parser could not determine a duration.
+    """
+    import os
+    import shutil
+
+    from vii.media.hashing import sha256_file
+    from vii.media.mp4_probe import probe_mp4
+
+    p = Path(path)
+    if not p.is_file():
+        raise InvalidUploadError(f"file not found: {path}")
+    if not os.access(p, os.R_OK):
+        raise InvalidUploadError(f"file is not readable: {path}")
+    size_bytes = p.stat().st_size
+    if size_bytes == 0:
+        raise InvalidUploadError(f"file is empty: {path}")
+    size_mb = size_bytes / (1024 * 1024)
+    if size_mb > max_mb:
+        raise UploadTooLargeError(f"file too large: {size_mb:.1f}MB > {max_mb}MB")
+    ext = p.suffix.lower()
+    if ext not in SUPPORTED_EXTS and ext not in CONVERTIBLE_EXTS:
+        raise UnsupportedMediaError(
+            f"unsupported format {ext or '(none)'}; supported: mp4 "
+            f"(convertible: {sorted(CONVERTIBLE_EXTS)})")
+
+    container = sniff_container(p)
+    expected = _EXT_CONTAINER.get(ext, "unknown")
+    signature_ok = (
+        container != "unknown"
+        and _CONTAINER_FAMILY.get(container) == _CONTAINER_FAMILY.get(expected))
+    if not signature_ok:
+        raise UnsupportedMediaError(
+            f"media signature mismatch: extension {ext} implies {expected}, "
+            f"but file signature is {container}")
+
+    limitations: list[str] = []
+    duration_s: float | None = None
+    duration_source = "unknown"
+    has_audio: bool | None = None
+    if container in ("mp4", "mov"):
+        probed = probe_mp4(p)
+        if probed.get("duration_s"):
+            duration_s = float(probed["duration_s"])
+            duration_source = "mp4_mvhd"
+    if duration_s is None and ffprobe_bin and shutil.which(ffprobe_bin):
+        try:
+            meta = ffmpeg_mod.metadata_summary(ffmpeg_mod.probe(p, ffprobe_bin))
+            if meta.get("duration_s"):
+                duration_s = float(meta["duration_s"])
+                duration_source = "ffprobe"
+            has_audio = bool(meta.get("has_audio"))
+        except Exception:  # probing is optional enrichment, never a blocker
+            limitations.append("ffprobe enrichment failed; duration unknown")
+    if duration_s is None:
+        limitations.append(
+            "duration could not be determined locally; it was not guessed "
+            "and no provider was contacted")
+    elif duration_s > max_seconds:
+        raise MediaDurationExceededError(
+            f"video too long: {duration_s:.0f}s > {max_seconds}s")
+
+    return MediaIngestionResult(
+        storage_ref=str(p), sha256=sha256_file(p), size_bytes=size_bytes,
+        size_mb=round(size_mb, 2), extension=ext, container=container,
+        signature_ok=True, duration_s=duration_s,
+        duration_source=duration_source, has_audio=has_audio,
+        native_video_ready=(ext == ".mp4" and container == "mp4"),
+        needs_conversion=ext in CONVERTIBLE_EXTS, limitations=limitations)

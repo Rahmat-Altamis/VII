@@ -1,21 +1,28 @@
 """End-to-end analysis pipeline: ingest → understand → transcribe → claims → search → assess → report."""
 from __future__ import annotations
 
-import json
 import logging
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from vii.config import Settings
-from vii.errors import ProviderConfigurationError, ProviderError
 from vii.domain.enums import (
-    AcquisitionMethod, ClaimKind, ClaimStatus, JobStatus, SearchMethod, SourceKind, StageName,
+    AcquisitionMethod,
+    ClaimKind,
+    ClaimStatus,
+    JobStatus,
+    SourceKind,
+    StageName,
 )
 from vii.domain.schemas import (
-    AnalysisCreate, ClaimIn, MediaOrigin, OriginalityResult, Transcript, VideoUnderstanding,
+    AnalysisCreate,
+    Transcript,
+    VideoUnderstanding,
 )
+from vii.errors import ProviderConfigurationError
 from vii.evidence import retrieval
+from vii.integrity import forensics as forensics_mod
 from vii.integrity import originality as orig_mod
 from vii.integrity import provenance as prov_mod
 from vii.media import ffmpeg as ffmpeg_mod
@@ -23,9 +30,8 @@ from vii.media import ingestion
 from vii.media.hashing import sha256_file
 from vii.meta import response_parser as rp
 from vii.meta.client import MetaClient
-from vii.meta.video import VIDEO_ANALYSIS_INSTRUCTIONS, build_file_id_payload, build_url_payload
 from vii.meta.transcription import transcribe_audio
-from vii.persistence.db import make_engine
+from vii.meta.video import build_file_id_payload, build_url_payload
 from vii.persistence.repositories import AnalysisRepo, JobRepo
 from vii.verification import assessment as assess_mod
 from vii.verification import claims as claims_mod
@@ -112,7 +118,8 @@ class Pipeline:
                 with self.Session() as db:
                     jobs = JobRepo(db)
                     job = jobs.get(job_id)
-                    if job is not None and str(job.status) != str(JobStatus.SUCCEEDED):
+                    if job is not None and str(job.status) not in (
+                            str(JobStatus.SUCCEEDED), str(JobStatus.CANCELLED)):
                         jobs.set_status(job, JobStatus.FAILED)
                         jobs.log(job_id, StageName.REPORT,
                                  f"failed: {type(e).__name__}: {str(e)[:400]}", "error")
@@ -141,6 +148,10 @@ class Pipeline:
                     "is unavailable. Set MODEL_API_KEY, or explicitly opt into "
                     "synthetic demo mode (VII_DEMO_MODE=true or demo=true).")
             ref, kind = job.source_ref, job.source_kind
+            # Re-run safety: a previous partial run (worker retry, manual
+            # re-run of a failed job) must not collide with its own
+            # job-scoped claim IDs or duplicate its outputs.
+            repo.clear_job_artifacts(job_id)
             jobs.set_status(job, JobStatus.INGESTING)
             cb(job_id, JobStatus.INGESTING, "Validating input…")
             jobs.log(job_id, StageName.INGESTION, f"kind={kind} demo={demo}")
@@ -154,6 +165,10 @@ class Pipeline:
             cb(job_id, JobStatus.UNDERSTANDING_VIDEO, "Understanding video…")
             jobs.log(job_id, StageName.VIDEO_UNDERSTANDING, f"method={acquisition} demo={demo}")
             vu = self._understand(job_id, kind, ref, media_path, acquisition, demo, repo, jobs)
+
+            # ---- B2. optional visual perception (SAM-class, if configured) ----
+            visual_observations, visual_state = self._perceive(
+                job_id, media_path, sha, demo, jobs, vu)
 
             # ---- C. transcription ----
             jobs.set_status(job, JobStatus.TRANSCRIBING)
@@ -222,11 +237,19 @@ class Pipeline:
                 jobs.log(job_id, StageName.ORIGINALITY, f"frame sampling failed: {e}", "warning")
                 frames = []
             orig = orig_mod.assess_originality(media_path, Path(st.storage_dir) / "corpus", frames)
+            forensic = forensics_mod.assess_manipulation(media_path, frames, meta)
+            # Alignment: media_origin must not keep claiming no detector
+            # ran once forensics have — embed the forensic detector text.
+            origin.detector_used = forensic.detector_used
+            jobs.log(job_id, StageName.ORIGINALITY,
+                     f"manipulation forensics: status={forensic.status} "
+                     f"signals={[(s.name, s.status) for s in forensic.signals]}")
 
             # ---- J. report ----
             jobs.set_status(job, JobStatus.REPORTING)
             payload = self._report(job_id, job.title, vu, tr, all_claims, assessments,
-                                   origin, orig, demo, repo, jobs)
+                                   origin, orig, demo, repo, jobs,
+                                   visual_observations, visual_state, forensic)
             jobs.set_status(job, JobStatus.SUCCEEDED)
             cb(job_id, JobStatus.SUCCEEDED, "Analysis complete.")
             return payload
@@ -376,14 +399,83 @@ class Pipeline:
                                   {"purpose": "user_data"}, up["file_id"], False)
             payload = build_file_id_payload(up["file_id"], st.meta_model)
         resp = self.client.responses_create(payload)
+        from vii.meta.client import provider_usage
+        usage = provider_usage(resp)
         repo.add_meta_request(job_id, "video_understanding", st.meta_model,
-                              {"model": st.meta_model, "mode": acquisition},
+                              {"model": st.meta_model, "mode": acquisition,
+                               "usage": usage},
                               resp.get("id", ""), False)
+        jobs.log(job_id, StageName.VIDEO_UNDERSTANDING,
+                 f"request_id={usage['request_id']} usage={usage['usage_status']} "
+                 f"cost={usage['cost_status']}")
         text = rp.output_text(resp)
-        return rp.parse_video_json(text, raw=text, offline=False)
+        vu = rp.parse_video_json(text, raw=text, offline=False)
+        vu.__dict__["_provider_usage"] = usage
+        return vu
+
+    def _perceive(self, job_id, media_path, sha, demo, jobs, vu=None):
+        """Optional visual perception stage.
+
+        Returns (observations, state) where state is disabled / blocked /
+        succeeded. A blocked optional stage is reported explicitly in the
+        job log and report — it never fabricates observations and never
+        fails an otherwise valid analysis. In demo mode the hosted SAM
+        provider is never called (live requests spend credits); the
+        local provider still runs because it is free and offline.
+        Concept prompts for SAM come from the video-understanding
+        entities (the documented Muse -> SAM pattern), capped by the
+        provider because every concept is a separate billed request.
+        """
+        st = self.settings
+        if not st.enable_visual_perception:
+            return [], {"status": "disabled",
+                        "notes": "visual perception not enabled"}
+        from vii.providers.visual import (
+            VisualPerceptionUnavailableError,
+            get_visual_perception_provider,
+        )
+        provider = get_visual_perception_provider(st)
+        if demo and provider.name == "sam":
+            msg = ("demo mode: hosted SAM 3.1 visual perception is not "
+                   "called (live requests spend credits); stage blocked "
+                   "explicitly, no observations produced")
+            jobs.log(job_id, StageName.VISUAL_PERCEPTION, msg, "warning")
+            return [], {"status": "blocked", "provider": provider.name,
+                        "notes": msg}
+        kwargs: dict = {"asset_id": sha or job_id}
+        if provider.name == "sam":
+            concepts: list[str] = []
+            seen: set[str] = set()
+            for values in (getattr(vu, "entities", None) or {}).values():
+                for v in values or []:
+                    c = str(v).strip()
+                    if c and c.lower() not in seen and len(c) <= 80:
+                        seen.add(c.lower())
+                        concepts.append(c)
+            kwargs["prompts"] = concepts
+        try:
+            observations = provider.perceive_video(str(media_path), **kwargs)
+        except VisualPerceptionUnavailableError as e:
+            jobs.log(job_id, StageName.VISUAL_PERCEPTION, str(e), "warning")
+            return [], {"status": "blocked", "provider": provider.name,
+                        "notes": str(e)}
+        jobs.log(job_id, StageName.VISUAL_PERCEPTION,
+                 f"provider={provider.name} observations={len(observations)}")
+        return observations, {"status": "succeeded", "provider": provider.name,
+                              "model": provider.model}
 
     def _transcribe(self, job_id, media_path, demo, repo, jobs) -> Transcript:
         st = self.settings
+        if not demo and not st.enable_transcription:
+            # Separate transcription is conditional: the native video path
+            # may already cover audio, and extraction costs FFmpeg + a
+            # provider call. Skipping is explicit, never silent.
+            tr = Transcript(segments=[], engine="transcription-disabled-by-config",
+                            offline=False, language="unknown")
+            jobs.log(job_id, StageName.TRANSCRIPTION,
+                     "transcription stage disabled by config "
+                     "(VII_ENABLE_TRANSCRIPTION=false); no audio extracted")
+            return tr
         if demo or not media_path or str(media_path).startswith("http"):
             if demo:
                 from vii.domain.schemas import TranscriptSegment
@@ -411,8 +503,12 @@ class Pipeline:
         return tr
 
     def _report(self, job_id, title, vu, tr, all_claims, assessments, origin, orig,
-                demo, repo, jobs) -> dict:
+                demo, repo, jobs, visual_observations=None, visual_state=None,
+                forensic=None) -> dict:
+        from vii.domain.schemas import DeepfakeAssessment
         from vii.reports.exporter import build_payload, export
+        if forensic is None:
+            forensic = DeepfakeAssessment(status="unavailable")
         claims_out, sources_out = [], []
         for c, a in assessments:
             claims_out.append({"id": c.__dict__.get("_id", ""), "text": c.text,
@@ -428,7 +524,8 @@ class Pipeline:
         dims = {
             "claim_verification": [{"id": c["id"], "status": c["status"]} for c in claims_out],
             "supporting_contradicting_evidence": sources_out,
-            "media_origin": origin.model_dump(),
+            "media_origin": {**origin.model_dump(),
+                             "manipulation_forensics": forensic.model_dump()},
             "originality": orig.model_dump(),
             "uncertainty_limitations": [
                 "Model descriptions of video content are not evidence of truth.",
@@ -438,10 +535,24 @@ class Pipeline:
                  "retrieved, cited evidence."),
             ] + ([f"Transcript engine: {tr.engine}"] if tr.offline or "error" in tr.engine else []),
         }
-        errors = [{"stage": l.stage, "message": l.message}
-                  for l in jobs.logs(job_id) if l.level in ("warning", "error")]
+        errors = [{"stage": entry.stage, "message": entry.message}
+                  for entry in jobs.logs(job_id) if entry.level in ("warning", "error")]
+        # Operational metadata lives OUTSIDE the five assessment dimensions
+        # (AD-3): visual-perception state and provider usage are preserved
+        # under payload["metadata"], never as extra dimensions.
+        metadata = {
+            "visual_perception": {
+                **(visual_state or {"status": "disabled"}),
+                "observations": [o.model_dump() for o in (visual_observations or [])],
+            },
+            "provider_usage": vu.__dict__.get(
+                "_provider_usage",
+                {"usage_status": "unknown",
+                 "cost_status": "unknown_pricing_unverified"}),
+        }
         payload = build_payload(job_id, title, dims, claims_out, sources_out, errors,
-                                dims["uncertainty_limitations"], demo)
+                                dims["uncertainty_limitations"], demo,
+                                metadata=metadata)
         for fmt in ("json", "markdown"):
             path = export(payload, Path(self.settings.storage_dir) / "exports", fmt)
             repo.add_report(job_id, fmt, str(path), payload)

@@ -24,13 +24,13 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from vii.application.services import AnalysisService
 from vii.config import get_settings
-from vii.errors import ProviderConfigurationError, ProviderError
 from vii.domain.schemas import (
     AnalysisCreate,
     CompareRequest,
     DatasetRegisterRequest,
     InvestigateRequest,
 )
+from vii.errors import ProviderConfigurationError, ProviderError
 
 log = logging.getLogger("vii.api.v1")
 router = APIRouter(prefix="/v1")
@@ -46,12 +46,30 @@ def svc() -> AnalysisService:
     return _service
 
 
+def _terminal_webhook(job_id: str, status: str) -> None:
+    """Worker terminal callback: deliver the stashed webhook for async
+    jobs (the sync /run path fires _fire_webhook directly). The consumer
+    comes from the job row; delivery itself no-ops when webhooks are
+    disabled or no target was stashed — never raises into the worker."""
+    consumer = "default"
+    try:
+        from vii.persistence.repositories import JobRepo
+        with svc().Session() as db:
+            job = JobRepo(db).get(job_id)
+            if job is not None:
+                consumer = str(job.consumer) or "default"
+    except Exception:
+        pass
+    _fire_webhook(job_id, status, consumer)
+
+
 def worker():
     global _worker
     if _worker is None:
         from vii.application.worker import Worker
         s = get_settings()
-        _worker = Worker(svc(), s.worker_concurrency)
+        _worker = Worker(svc(), s.worker_concurrency,
+                         on_terminal=_terminal_webhook)
     return _worker
 
 
@@ -95,7 +113,7 @@ def create_analysis(req: AnalysisCreate, auth: str = Depends(consumer_id),
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     try:
-        receipt = worker().enqueue(job_id)
+        worker().enqueue(job_id)
     except Exception as e:  # enqueue failure surfaces honestly
         raise HTTPException(500, f"job created but enqueue failed: {e}") from e
     webhook_accepted = False
@@ -175,7 +193,7 @@ def get_report_md(job_id: str, auth: str = Depends(consumer_id)):
 
 # -- uploads -------------------------------------------------------------
 @router.post("/uploads", status_code=201)
-def upload_video(file: UploadFile = File(...), auth: str = Depends(consumer_id)):
+def upload_video(file: UploadFile = File(...), auth: str = Depends(consumer_id)):  # noqa: B008
     """Multipart local-video upload -> stored original -> ready for /v1/analyses.
 
     Streams in 1 MiB chunks and aborts past VII_MAX_UPLOAD_MB (deleting the
@@ -264,9 +282,9 @@ def compare(req: CompareRequest, auth: str = Depends(consumer_id)):
         r_sha, c_sha = (r_o.get("sha256") or "").lower(), (c_o.get("sha256") or "").lower()
         out["exact_match"] = bool(r_sha and r_sha == c_sha)
         dists: list[int] = []
-        for rm in r_o.get("phash_matches") or []:
-            for cm in c_o.get("phash_matches") or []:
-                d = phash_distance(str(rm.get("record", "")), str(cm.get("record", "")))
+        for rh in r_o.get("phashes") or []:
+            for ch in c_o.get("phashes") or []:
+                d = phash_distance(str(rh), str(ch))
                 if d is not None:
                     dists.append(d)
         if dists:
@@ -295,7 +313,6 @@ def register_sample(req: DatasetRegisterRequest, auth: str = Depends(consumer_id
         platform = social_mod.classify_url(req.source_url).get("platform", "")
     storage_ref, sha, dur, meta = req.storage_ref, "", 0.0, {}
     if req.local_path:
-        from vii.media import ingestion
         from vii.media.hashing import sha256_file
         p = Path(req.local_path)
         # Path-boundary guard: server-side local_path may only reference
@@ -374,8 +391,9 @@ def ingest_dataset_csv(dry_run: bool = True, auth: str = Depends(consumer_id)):
 
 @router.get("/datasets/samples/{sample_id}")
 def get_sample(sample_id: str, auth: str = Depends(consumer_id)):
-    from vii.persistence.repositories import DatasetRepo
     import json as _json
+
+    from vii.persistence.repositories import DatasetRepo
     with svc().Session() as db:
         row = DatasetRepo(db).get(sample_id, auth)
         if not row:
@@ -419,7 +437,7 @@ def _webhook_target_ok(url: str) -> tuple[bool, str]:
     if host.endswith((".internal", ".local", ".lan", ".corp")):
         return False, "internal hostnames refused"
     try:
-        for fam, _, _, _, sockaddr in socket.getaddrinfo(host, None):
+        for _fam, _, _, _, sockaddr in socket.getaddrinfo(host, None):
             ip = ipaddress.ip_address(sockaddr[0])
             if (ip.is_private or ip.is_loopback or ip.is_link_local
                     or ip.is_multicast or ip.is_reserved
@@ -449,7 +467,6 @@ def _stash_webhook(job_id: str, url: str, consumer: str) -> None:
 
 
 def _fire_webhook(job_id: str, status: str, consumer: str) -> None:
-    import socket
     import urllib.request
     s = get_settings()
     if not s.webhook_enabled:

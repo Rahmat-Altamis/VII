@@ -22,10 +22,16 @@ RUNNING_STATES = {"ingesting", "understanding_video", "transcribing",
 class Worker:
     """Local-process worker. Redis/Celery optional later; never required."""
 
-    def __init__(self, service, concurrency: int = 2, max_retries: int = 2):
+    def __init__(self, service, concurrency: int = 2, max_retries: int = 2,
+                 on_terminal=None):
         self.service = service
         self.concurrency = max(1, concurrency)
         self.max_retries = max_retries
+        # Optional terminal-state callback ``(job_id, status) -> None``,
+        # fired exactly once when a job reaches succeeded/failed/cancelled
+        # (never on a retryable intermediate failure). Used by the API
+        # layer to deliver webhooks for async jobs; omitted = no delivery.
+        self.on_terminal = on_terminal
         self._pool: ThreadPoolExecutor | None = None
         self._stop = threading.Event()
         self._inflight: dict[str, object] = {}
@@ -92,8 +98,24 @@ class Worker:
             repo.log(job_id, "worker", "cancellation requested", "warning")
             status = str(job.status)
         with self._lock:
+            owned = job_id in self._inflight
             self._inflight.pop(job_id, None)
+        if not owned:
+            # No executor will observe this cancellation (job not queued
+            # or running here), so the terminal callback fires here;
+            # an owning executor fires it instead — exactly once overall.
+            self._notify_terminal(job_id, status)
         return {"job_id": job_id, "status": status, "cancelled": True}
+
+    def _notify_terminal(self, job_id: str, status: str) -> None:
+        """Fire the terminal callback once; delivery errors never break
+        job execution (mirrors webhook delivery: log, never raise)."""
+        if self.on_terminal is None:
+            return
+        try:
+            self.on_terminal(job_id, status)
+        except Exception as e:
+            log.warning("terminal callback failed [%s]: %s", job_id, str(e)[:200])
 
     # -- execution --------------------------------------------------------
     def _execute(self, job_id: str, attempt: int) -> None:
@@ -106,6 +128,7 @@ class Worker:
                 if job is None:
                     return
                 if str(job.status) == str(JobStatus.CANCELLED):
+                    self._notify_terminal(job_id, str(JobStatus.CANCELLED))
                     return
                 repo.set_status(job, JobStatus.INGESTING)
 
@@ -125,25 +148,60 @@ class Worker:
                     log.warning("progress persist failed [%s]: %s", jid, str(e)[:200])
 
             self.service.run(job_id, _progress)
+            try:
+                with self.service.Session() as db:
+                    done = JobRepo(db).get(job_id)
+                    final = str(done.status) if done is not None else ""
+            except Exception:
+                final = ""
+            if final in TERMINAL:
+                self._notify_terminal(job_id, final)
         except Exception as e:
-            retryable = attempt < self.max_retries and "cancelled" not in str(e).lower()
+            # Whole-job retries re-run every provider stage (and can
+            # re-upload / re-spend). Only retry when the failure is typed
+            # retryable or an unknown transient error; configuration,
+            # permission, validation, and malformed-response failures are
+            # terminal because re-running the same job cannot fix them.
+            from vii.errors import ProviderError
+            non_retryable = (
+                isinstance(e, ValueError)
+                or (isinstance(e, ProviderError) and not getattr(e, "retryable", False)))
+            retryable = (attempt < self.max_retries and not non_retryable
+                         and "cancelled" not in str(e).lower())
+            preserved: str | None = None
+            failed = False
             try:
                 with self.service.Session() as db:
                     repo = JobRepo(db)
                     job = repo.get(job_id)
                     if job is None:
                         return
-                    if retryable:
+                    if str(job.status) in (str(JobStatus.SUCCEEDED),
+                                           str(JobStatus.CANCELLED)):
+                        # Terminal state already persisted (e.g. cancelled
+                        # mid-run, or succeeded before a late error): never
+                        # overwrite it with FAILED (pipeline parity).
+                        preserved = str(job.status)
+                        repo.log(job_id, "worker",
+                                 f"terminal status {preserved} preserved: "
+                                 f"{str(e)[:300]}", "warning")
+                    elif retryable:
                         repo.log(job_id, "worker",
                                  f"attempt {attempt + 1} failed: {str(e)[:300]} — retrying",
                                  "warning")
                     else:
                         repo.set_status(job, JobStatus.FAILED)
+                        failed = True
                         repo.log(job_id, "worker",
                                  f"failed after {attempt + 1} attempt(s): {str(e)[:500]}",
                                  "error")
             except Exception:
                 pass
+            if preserved is not None:
+                self._notify_terminal(job_id, preserved)
+                return
+            if failed:
+                self._notify_terminal(job_id, str(JobStatus.FAILED))
             if retryable:
                 time.sleep(2 * (attempt + 1))
                 if not self._stop.is_set():

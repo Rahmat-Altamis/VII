@@ -25,6 +25,43 @@ cp .env.example .env           # set MODEL_API_KEY for real analysis
 python3 -m pytest tests/ -q    # mocked tests only; no credits spent
 ```
 
+## Library usage
+
+VII is installable as a Python library; the public API is the set of
+names exported from `vii` (see `vii.__all__`). Internal packages are
+implementation details. A core install (`pip install .`) carries only
+the lightweight runtime dependencies; server, database, provider, and
+media extras are declared separately in `pyproject.toml`
+(`.[app]`, `.[api]`, `.[db]`, `.[provider]`, `.[media]`).
+
+Local operations need no API key, server, database, or network:
+
+```python
+from vii import VII
+
+client = VII()  # configuration from environment / .env
+info = client.inspect_media("sample.mp4")   # validate + signature + SHA-256
+digest = client.sha256("sample.mp4")
+originality = client.assess_originality("sample.mp4")  # local corpus check
+report = client.validate_dataset()  # data/dataset.csv or DATASET_CSV_PATH
+```
+
+Provider-backed analysis is explicit and runs only when called; it
+uses the configured database/storage and raises
+`ProviderConfigurationError` when no key is configured instead of
+returning fabricated results:
+
+```python
+client = VII(api_key="YOUR_API_KEY")
+result = client.analyze("sample.mp4")  # or a public http(s) media URL
+```
+
+Integrity results report what was actually checked (hashes, corpus
+matches, cited evidence) — they never prove a video is genuine.
+Downstream applications and a future CLI should consume this public
+API rather than importing `vii.api`, `vii.application`, or other
+internal modules.
+
 ## Dataset
 
 Drop a real dataset at **`data/dataset.csv`** (or set `DATASET_CSV_PATH`),

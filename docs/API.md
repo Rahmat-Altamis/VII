@@ -37,7 +37,18 @@ the same authentication as `/v1`.
 |---|---|---|
 | `GET /health`, `GET /v1/health` | No | Liveness + mode (`live_mode`, `offline_mode`, model). |
 | `GET /ready` | No | Readiness: DB `SELECT 1` + storage dir check; `503` when unready. |
-| `GET /diagnostics`, `GET /v1/diagnostics` | Yes (v1) | Redacted settings + ffmpeg/ffprobe presence. Secrets never returned. |
+| `GET /diagnostics`, `GET /v1/diagnostics` | Yes (v1) | Redacted settings + ffmpeg/ffprobe presence + `capabilities` (per-capability states: `configured_unverified` (incl. SAM 3.1 visual perception with a key configured), `blocked`, `disabled`, `unavailable_no_provider`, `available_local` for the local visual provider, `optional` for ffmpeg; no provider is contacted). Secrets never returned. |
+
+## Ingestion-only validation (no analysis)
+
+`python3 -m vii.main --ingest-only PATH` validates and hashes one local
+media file (existence, readability, size, container signature, SHA-256,
+MP4 duration when locally determinable) and prints a JSON
+`MediaIngestionResult`. It creates **no analysis job**, enqueues no
+worker, and calls no provider — supported native MP4 ingestion does not
+require FFmpeg. Exit `0` = valid, `2` = rejected (typed error in the JSON
+body). There is deliberately no HTTP route for arbitrary server paths;
+HTTP ingestion remains `POST /v1/uploads` followed by `POST /v1/analyses`.
 
 ## Analyses & jobs (`/v1`)
 

@@ -10,9 +10,47 @@ import logging
 import time
 from typing import Any
 
-from vii.errors import ProviderConfigurationError, ProviderError
+from vii.errors import (
+    ProviderConfigurationError,
+    ProviderError,
+    ProviderPermissionError,
+    ProviderRateLimitError,
+    ProviderTimeoutError,
+)
 
 log = logging.getLogger("vii.meta")
+
+
+def provider_usage(resp: dict) -> dict:
+    """Normalize provider-reported usage; never invent numbers.
+
+    Returns usage_status="reported" with token counts only when the
+    provider actually returned a usage object, else "unknown".
+    Cost stays unknown until pricing is verified against official docs.
+    """
+    usage = resp.get("usage") if isinstance(resp, dict) else None
+    if not isinstance(usage, dict):
+        return {"request_id": (resp.get("id", "") if isinstance(resp, dict) else ""),
+                "usage_status": "unknown", "estimated_cost_usd": None,
+                "cost_status": "unknown_pricing_unverified"}
+    return {"request_id": resp.get("id", ""), "usage_status": "reported",
+            "input_tokens": usage.get("input_tokens"),
+            "output_tokens": usage.get("output_tokens"),
+            "total_tokens": usage.get("total_tokens"),
+            "estimated_cost_usd": None,
+            "cost_status": "unknown_pricing_unverified"}
+
+
+def _classify_error(exc: Exception) -> ProviderError:
+    """Map a transport exception to a typed provider error (no secrets)."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status in (401, 403):
+        return ProviderPermissionError(f"provider permission denied (HTTP {status})")
+    if status == 429:
+        return ProviderRateLimitError("provider rate limited (HTTP 429)")
+    if "timeout" in type(exc).__name__.lower() or "timed out" in str(exc).lower():
+        return ProviderTimeoutError(f"provider request timed out: {str(exc)[:200]}")
+    return ProviderError(f"provider request failed: {str(exc)[:300]}")
 
 
 def _redact(obj: Any) -> Any:
@@ -71,6 +109,9 @@ class MetaClient:
             except Exception as e:
                 last = e
                 log.warning("files.upload attempt %d failed: %s", attempt, str(e)[:300])
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                if status in (401, 403):
+                    break  # credentials/permissions will not heal by retrying
                 time.sleep(1.5 * (attempt + 1))
         raise ProviderError(f"Files API upload failed after retries: {last}")
 
@@ -91,11 +132,14 @@ class MetaClient:
                 status = getattr(getattr(e, "response", None), "status_code", None)
                 log.warning("responses.create attempt %d failed (%s): %s",
                             attempt, status, str(e)[:300])
+                if status in (401, 403):
+                    break  # credentials/permissions will not heal by retrying
                 if status == 429:
                     time.sleep(4 * (attempt + 1))
                     continue
                 time.sleep(1.5 * (attempt + 1))
-        raise ProviderError(f"Responses API failed after retries: {last}")
+        raise _classify_error(last) if last is not None else ProviderError(
+            "Responses API failed")
 
     # -- Transcription -------------------------------------------------------
     def transcribe(self, audio_path: str, language: str | None = None) -> dict:

@@ -74,6 +74,22 @@ class Settings(BaseSettings):
                                    alias="DATASET_CSV_PATH")
     request_timeout_s: float = 120.0
     max_retries: int = 2
+    # Stage gates. Transcription is a separate provider path (FFmpeg audio
+    # extraction + transcription model); it is only needed when the chosen
+    # video-understanding path does not already cover audio. Default keeps
+    # historical behaviour for local files.
+    enable_transcription: bool = Field(default=True, alias="VII_ENABLE_TRANSCRIPTION")
+    # Visual perception: disabled by default. Providers: ``local``
+    # (working frame analysis) and ``sam`` (SAM 3.1 adapter implemented
+    # against the docs-verified contract; same key as MODEL_API_KEY
+    # unless VII_SAM_API_KEY overrides it). Enabling this alone never
+    # fabricates results — see vii.providers.visual.
+    enable_visual_perception: bool = Field(
+        default=False, alias="VII_ENABLE_VISUAL_PERCEPTION")
+    visual_perception_provider: str = Field(
+        default="", alias="VII_VISUAL_PERCEPTION_PROVIDER")
+    sam_api_key: str = Field(default="", alias="VII_SAM_API_KEY")
+    sam_model: str = Field(default="", alias="VII_SAM_MODEL")
 
     consumer_keys: str = Field(default="", alias="VII_CONSUMER_KEYS")
     # Explicit mapping "consumer-name:service-key,..." — preferred identity
@@ -148,7 +164,7 @@ class Settings(BaseSettings):
     def redacted(self) -> dict:
         d = self.model_dump()
         d["model_api_key"] = f"*** ({self.key_source})" if self.has_api_key else "(not set)"
-        for k in ("instagram_token", "facebook_page_token"):
+        for k in ("instagram_token", "facebook_page_token", "sam_api_key"):
             d[k] = "*** (set)" if d.get(k) else "(not set)"
         d["api_keys"] = f"*** ({len(self.valid_api_keys())} configured)" if self.api_keys else "(not set)"
         n_map = len(self.consumer_key_map())
