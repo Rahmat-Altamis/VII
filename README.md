@@ -20,18 +20,33 @@ cd VII
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[app,mcp]"
-cp .env.example .env
 ```
 
-Put your provider key in `.env` as `MODEL_API_KEY`. Then verify:
+Then start the app and add your key inside it. No hidden files needed:
 
 ```text
-.venv/bin/vii credentials status
-.venv/bin/python -m pytest tests/ -q
+.venv/bin/vii tui
 ```
 
-The suite runs 255 tests with mocked providers, so verification spends
-no credits. Desktop UI users add the desktop extra at install time.
+```text
+/key set
+```
+
+Paste your Meta API key when asked. VII stores it in your OS keyring
+(or a permission 0600 fallback file when no keyring exists) and never
+shows it again. Verify with `/status` inside the TUI.
+
+Developers can still use a `.env` file (`cp .env.example .env`, then
+set `MODEL_API_KEY`) or run `.venv/bin/vii credentials set`. The test
+suite (`.venv/bin/python -m pytest tests/ -q`, 255 tests, mocked
+providers) spends no credits. Desktop UI users add the desktop extra
+at install time.
+
+Everything provider backed runs on one provider: the Meta Model API
+(video understanding on Muse Spark, visual perception on SAM, speech
+to text on Muse Voice, plus evidence search through the Meta built in
+web search tool). No Exa, no Tavily, no extra search key. One Meta key
+unlocks every online feature.
 
 ## Use it: terminal UI (recommended)
 
@@ -107,9 +122,27 @@ For Claude Code, OpenClaw, and other agents:
 .venv/bin/vii-mcp
 ```
 
-Register once in Claude Code with `claude mcp add vii` pointing at
-that binary. Available tools: `vii_quick_look`, `vii_check`,
-`vii_follow_up`, `vii_key_status`. Agents pass their own key per call.
+Register once in Claude Code (absolute path to your install):
+
+```text
+claude mcp add vii /home/YOU/VII/.venv/bin/vii-mcp
+```
+
+Or add this JSON to your Claude Code MCP settings:
+
+```json
+{
+  "mcpServers": {
+    "vii": {
+      "command": "/home/YOU/VII/.venv/bin/vii-mcp"
+    }
+  }
+}
+```
+
+Available tools: `vii_quick_look`, `vii_check`, `vii_follow_up`,
+`vii_key_status`. Agents pass their own Meta key per call through the
+`api_key` argument, so agent setups never need VII environment files.
 
 ## Use it: API server
 
