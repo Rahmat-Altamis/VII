@@ -1,7 +1,7 @@
 """Ingestion-only media inspection: validation, hashing, signatures.
 
 These tests use synthetic byte fixtures only. The ingestion-only path must
-never create an analysis job, enqueue a worker, or call a provider — that
+never create an analysis job, enqueue a worker, or call a provider, that
 is asserted explicitly, not assumed.
 """
 from __future__ import annotations

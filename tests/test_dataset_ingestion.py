@@ -1,6 +1,6 @@
 """Dataset CSV subsystem: schema, row errors, duplicates, dry-run vs apply.
 
-Synthetic CSV fixtures only — no video content, no model calls, and
+Synthetic CSV fixtures only, no video content, no model calls, and
 ingestion must never create analyses.
 """
 from __future__ import annotations

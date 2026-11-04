@@ -41,6 +41,12 @@ def parse_search_results(resp: dict, method: str = "meta_web_search") -> list[Se
             items.append(SearchResultItem(
                 url=r["url"], title=r.get("title", ""), snippet=r.get("snippet", r.get("text", "")),
                 publisher=r.get("publisher", r.get("source", "")),
+                relationship=str(r.get("relationship") or r.get("relation")
+                                 or r.get("stance") or ""),
+                publication_date=str(r.get("publication_date")
+                                     or r.get("published_at")
+                                     or r.get("published_date")
+                                     or r.get("date") or ""),
                 search_response_id=str(item.get("id", rid)), method=method))  # type: ignore[arg-type]
     return items
 

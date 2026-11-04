@@ -1,4 +1,4 @@
-"""Source ranking helpers — prefer official/primary/credible material."""
+"""Source ranking helpers, prefer official/primary/credible material."""
 from __future__ import annotations
 
 from urllib.parse import urlparse

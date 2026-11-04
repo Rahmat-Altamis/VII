@@ -1,4 +1,4 @@
-"""Lightweight ISO-BMFF (MP4/MOV) metadata parsing — pure Python, no FFmpeg.
+"""Lightweight ISO-BMFF (MP4/MOV) metadata parsing, pure Python, no FFmpeg.
 
 Only what ingestion needs: the ``ftyp`` major brand and the ``moov/mvhd``
 duration. Anything unparsable yields ``None`` fields, never a guess; callers

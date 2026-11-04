@@ -2,7 +2,7 @@
 
 Canonical location: ``data/dataset.csv`` (override with ``DATASET_CSV_PATH``).
 The application starts normally when the file is absent; nothing here runs at
-import or startup, and ingestion NEVER starts video analysis — it only
+import or startup, and ingestion NEVER starts video analysis, it only
 validates and (on explicit request) registers rows into the consumer's
 Unclassified Dataset Inbox (``dataset_samples``, ``annotation_status='pending'``).
 
@@ -107,14 +107,14 @@ def _detect_dialect(sample: str) -> tuple[str, type[csv.Dialect]]:
 def validate_csv(path: str | Path) -> ValidationReport:
     """Validate a dataset CSV without touching the database or any video.
 
-    Missing file is a normal state (report.exists=False), not an exception —
+    Missing file is a normal state (report.exists=False), not an exception,
     the app must start and run with no dataset present.
     """
     p = Path(path)
     report = ValidationReport(path=str(p), exists=p.is_file())
     if not report.exists:
         report.warnings.append(
-            f"dataset file not found at {p} — this is expected before a "
+            f"dataset file not found at {p}, this is expected before a "
             "dataset is supplied; the application runs without it")
         return report
 

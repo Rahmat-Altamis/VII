@@ -1,4 +1,4 @@
-"""Provider capability report — local configuration only, no provider calls.
+"""Provider capability report, local configuration only, no provider calls.
 
 Every state is explicit: ``configured_unverified`` means credentials/config
 are present but the live contract has not been exercised in this
@@ -12,6 +12,41 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from vii.config import Settings
+
+
+def readiness_report(settings: Settings) -> dict:
+    """Four distinct readiness tiers (local checks only, no provider call).
+
+    ``live_verification`` is only ever ``not_verified`` here: a configured
+    key proves configuration, never provider compatibility. Live proof
+    requires the manual authorized smoke test (see README).
+    """
+    return {
+        "local_ingestion": {
+            "status": "ready",
+            "notes": ("Local media validation, hashing and MP4 probing "
+                      "need no key, server, or network."),
+        },
+        "demo": {
+            "status": "available_opt_in",
+            "notes": ("Synthetic demo only via VII_DEMO_MODE=true, "
+                      "demo=True, or vii check --demo; labeled synthetic."),
+        },
+        "provider_configuration": {
+            "status": ("configured_unverified" if settings.has_api_key
+                       else "blocked"),
+            "key_source": settings.key_source,
+            "model": settings.meta_model,
+            "base_url": settings.meta_base_url,
+            "notes": ("A configured key proves configuration only, not "
+                      "provider acceptance or model compatibility."),
+        },
+        "live_verification": {
+            "status": "not_verified",
+            "notes": ("No live request was made. Run the manual authorized "
+                      "smoke test in README to verify a real key."),
+        },
+    }
 
 
 def provider_capabilities(settings: Settings) -> dict:

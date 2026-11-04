@@ -1,7 +1,7 @@
 """Authorized Instagram Graph API media retrieval.
 
 Requires a professional-account user token (VII_INSTAGRAM_TOKEN). Never
-bypasses auth; copyright/download restrictions are respected — when the
+bypasses auth; copyright/download restrictions are respected, when the
 API response carries no usable media_url, the caller must require a
 local upload instead of inventing a download path.
 """
@@ -62,7 +62,7 @@ def fetch_media(url: str, token: str, timeout_s: float = 30.0) -> dict:
                     "auth_method": "instagram_graph_oembed",
                     "status": r.status_code, "title": data.get("title", ""),
                     "media_binary_acquired": False}
-    except Exception as e:  # network/timeout — surface, never silent
+    except Exception as e:  # network/timeout, surface, never silent
         log.warning("instagram fetch failed: %s", str(e)[:200])
         return {"ok": False, "platform": "instagram", "kind": info["kind"],
                 "error": f"Instagram Graph request failed: {str(e)[:200]}; "

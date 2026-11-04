@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import ipaddress
 from functools import lru_cache
 from pathlib import Path
@@ -50,6 +51,7 @@ class Settings(BaseSettings):
     offline_mode: bool = Field(default=False, alias="VII_OFFLINE_MODE")
     database_url: str = Field(default="sqlite:///./data/vii.db", alias="VII_DATABASE_URL")
     storage_dir: Path = Field(default=Path("./data"), alias="VII_STORAGE_DIR")
+    vii_media_dir: str = Field(default="", alias="VII_MEDIA_DIR")
     max_upload_mb: int = Field(default=512, alias="VII_MAX_UPLOAD_MB")
     max_video_seconds: int = Field(default=3600, alias="VII_MAX_VIDEO_SECONDS")
     ffmpeg_bin: str = Field(default="ffmpeg", alias="VII_FFMPEG_BIN")
@@ -67,6 +69,7 @@ class Settings(BaseSettings):
     worker_concurrency: int = Field(default=2, alias="VII_WORKER_CONCURRENCY")
     require_auth: bool = Field(default=False, alias="VII_REQUIRE_AUTH")
     webhook_enabled: bool = Field(default=False, alias="VII_WEBHOOK_ENABLED")
+    webhook_secret: str = Field(default="", alias="VII_WEBHOOK_SECRET")
     # Dataset CSV: canonical default is data/dataset.csv. The app never
     # requires it at startup and never auto-starts analysis from it; see
     # vii.dataset.ingestion and docs/DATASET.md. DATASET_CSV_PATH overrides.
@@ -83,20 +86,33 @@ class Settings(BaseSettings):
     # (working frame analysis) and ``sam`` (SAM 3.1 adapter implemented
     # against the docs-verified contract; same key as MODEL_API_KEY
     # unless VII_SAM_API_KEY overrides it). Enabling this alone never
-    # fabricates results — see vii.providers.visual.
+    # fabricates results, see vii.providers.visual.
     enable_visual_perception: bool = Field(
         default=False, alias="VII_ENABLE_VISUAL_PERCEPTION")
     visual_perception_provider: str = Field(
         default="", alias="VII_VISUAL_PERCEPTION_PROVIDER")
     sam_api_key: str = Field(default="", alias="VII_SAM_API_KEY")
     sam_model: str = Field(default="", alias="VII_SAM_MODEL")
+    # AI-generation detection: hosted per-frame judgments, off by default.
+    # Each analyzed frame is one billed provider call; keep the sample
+    # small. Output is a probability with measured error rates, never a
+    # real/fake verdict, see vii.integrity.ai_detection.
+    enable_ai_detection: bool = Field(
+        default=False, alias="VII_ENABLE_AI_DETECTION")
+    ai_detection_samples: int = Field(
+        default=5, alias="VII_AI_DETECTION_SAMPLES")
+    # Spam-format screening: one hosted judgment over summary + transcript
+    # per live video. Flags mass-produced formats (storytime spam, fake
+    # chats, repost farms) as probability + signals, never a verdict.
+    enable_spam_detection: bool = Field(
+        default=True, alias="VII_ENABLE_SPAM_DETECTION")
 
     consumer_keys: str = Field(default="", alias="VII_CONSUMER_KEYS")
-    # Explicit mapping "consumer-name:service-key,..." — preferred identity
+    # Explicit mapping "consumer-name:service-key,...", preferred identity
     # source. Keys never appear in logs; only the consumer name is stored.
 
     def has_configured_keys(self) -> bool:
-        """True when at least one usable service key exists — a non-empty
+        """True when at least one usable service key exists, a non-empty
         VII_API_KEYS entry or a well-formed VII_CONSUMER_KEYS 'name:key'
         mapping. Whitespace/comma/malformed-only values count as none."""
         return bool(self.valid_api_keys() or self.consumer_key_map())
@@ -166,6 +182,12 @@ class Settings(BaseSettings):
         d["model_api_key"] = f"*** ({self.key_source})" if self.has_api_key else "(not set)"
         for k in ("instagram_token", "facebook_page_token", "sam_api_key"):
             d[k] = "*** (set)" if d.get(k) else "(not set)"
+        d["webhook_signing_key"] = "*** (set)" if d.pop("webhook_secret", "") \
+            else "(not set)"
+        url = str(d.get("database_url") or "")
+        if "://" in url and "@" in url:
+            scheme, rest = url.split("://", 1)
+            d["database_url"] = f"{scheme}://***@{rest.split('@', 1)[1]}"
         d["api_keys"] = f"*** ({len(self.valid_api_keys())} configured)" if self.api_keys else "(not set)"
         n_map = len(self.consumer_key_map())
         d["consumer_keys"] = (f"*** ({n_map} consumer mapping(s))" if self.consumer_keys.strip()
@@ -178,7 +200,7 @@ class Settings(BaseSettings):
     def consumer_key_map(self) -> dict[str, str]:
         """Parse VII_CONSUMER_KEYS 'name:key,...' into {key: name}.
 
-        Malformed entries (no colon, empty name or key) are skipped — they
+        Malformed entries (no colon, empty name or key) are skipped, they
         must never authenticate anyone. Values never enter logs.
         """
         out: dict[str, str] = {}
@@ -206,11 +228,14 @@ class Settings(BaseSettings):
             return True, self.consumer_id or "default"
         if not provided:
             return False, ""
-        mapped = self.consumer_key_map().get(provided)
-        if mapped:
-            return True, mapped
-        if provided in self.valid_api_keys():
-            return True, f"key-{hashlib.sha256(provided.encode()).hexdigest()}"
+        # Constant-time comparisons: key material is never matched with
+        # == / set membership, which would leak timing information.
+        for key, name in self.consumer_key_map().items():
+            if hmac.compare_digest(provided.encode(), key.encode()):
+                return True, name
+        for key in self.valid_api_keys():
+            if hmac.compare_digest(provided.encode(), key.encode()):
+                return True, f"key-{hashlib.sha256(provided.encode()).hexdigest()}"
         return False, ""
 
 

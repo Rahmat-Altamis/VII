@@ -1,6 +1,6 @@
 """Synthetic beta benchmark v0.1: schema, safety invariants, display guard.
 
-Ships no media, calls no provider, and asserts only template behaviour —
+Ships no media, calls no provider, and asserts only template behaviour,
 never real-world detection accuracy.
 """
 import copy

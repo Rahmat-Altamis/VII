@@ -126,7 +126,7 @@ class VII:
         perceptual-hash near-duplicates. ``corpus_dir`` defaults to
         ``<storage_dir>/corpus`` (matching the analysis pipeline); a
         missing corpus simply yields no matches. "No match" means no
-        duplicate was found in that corpus — it does not prove the
+        duplicate was found in that corpus, it does not prove the
         media is original or genuine. Remote URLs are not fetched;
         they return an explanatory result with an empty digest.
         """
@@ -178,6 +178,71 @@ class VII:
         from vii.providers.capabilities import provider_capabilities
 
         return provider_capabilities(self.settings)
+
+    def quick_look(self, path: str | Path, sample_frames: int = 8) -> dict:
+        """Fast local pre-screen of one video file (seconds, no provider).
+
+        Samples real frames and runs them through the forensics
+        ensemble (frame reuse, recompression error, temporal
+        transitions) plus perceptual-hash originality, media probing,
+        and spam-format markers, then returns a plain dict. No job is
+        created, no credits are spent, and nothing here is a
+        genuine/fake verdict. Errors raise the same typed
+        ``ValueError`` subclasses as :meth:`inspect_media`.
+        """
+        import tempfile as _tempfile
+        import time as _time
+
+        from vii.integrity.spam import FORMULA_MARKERS
+        from vii.media.ffmpeg import probe as _probe
+        from vii.media.ffmpeg import sample_frames as _sample
+
+        started = _time.monotonic()
+        info = self.inspect_media(path)
+        tmpdir = _tempfile.mkdtemp(prefix="vii_quick_")
+        try:
+            try:
+                frames = _sample(path, tmpdir, max_frames=sample_frames)
+            except Exception:
+                frames = []
+            try:
+                probed = _probe(path, self.settings.ffprobe_bin)
+                streams = [{k: s.get(k) for k in
+                            ("codec_type", "codec_name", "width", "height",
+                             "avg_frame_rate", "sample_rate", "channels")}
+                           for s in probed.get("streams", [])]
+            except Exception:
+                streams = []
+            forensic = self.assess_forensics(path, frames or None)
+            orig = self.assess_originality(path, sample_frames=frames or None)
+        finally:
+            import shutil as _shutil
+
+            _shutil.rmtree(tmpdir, ignore_errors=True)
+        file_name = Path(path).name
+        markers = [m for m in FORMULA_MARKERS if m in file_name.lower()]
+        return {
+            "path": str(path),
+            "file_name": file_name,
+            "size_bytes": info.size_bytes,
+            "duration_s": info.duration_s,
+            "duration_source": info.duration_source,
+            "container": info.container,
+            "has_audio": info.has_audio,
+            "sha256": info.sha256,
+            "streams": streams,
+            "frames_sampled": len(frames),
+            "forensics": forensic.model_dump(),
+            "originality": {
+                "exact_duplicate_of": orig.exact_duplicate_of,
+                "phash_matches": list(orig.phash_matches or []),
+                "notes": orig.notes,
+            },
+            "filename_markers": markers,
+            "elapsed_s": round(_time.monotonic() - started, 2),
+            "note": ("Local pre-screen only: fast signals, no provider "
+                     "analysis. Full results follow from the pipeline."),
+        }
 
     # -- provider-backed analysis ------------------------------------------
 

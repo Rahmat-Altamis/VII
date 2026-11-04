@@ -106,6 +106,11 @@ class SearchResultItem(BaseModel):
     title: str = ""
     snippet: str = ""
     publisher: str = ""
+    # Stance of this source toward the claim: supports | contradicts |
+    # context | "" (provider did not state a stance). Assessment is
+    # stance-based: SUPPORTED/CONTRADICTED require a matching stance.
+    relationship: str = ""
+    publication_date: str = ""
     retrieved_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     search_response_id: str = ""
     method: SearchMethod = SearchMethod.META_WEB_SEARCH
@@ -152,7 +157,7 @@ class MediaIngestionResult(BaseModel):
 
     Produced by ``vii.media.ingestion.inspect_local_media``: the file was
     validated, signature-checked and hashed locally. ``duration_s`` is None
-    when no local method could determine it — never guessed.
+    when no local method could determine it, never guessed.
     """
 
     storage_ref: str
@@ -175,7 +180,7 @@ class VisualObservation(BaseModel):
 
     Optional fields stay None when the provider does not supply them;
     they are never filled by inference. Produced only by a real visual
-    perception adapter — see vii.providers.visual.
+    perception adapter, see vii.providers.visual.
     """
 
     observation_id: str = ""
@@ -198,7 +203,7 @@ class MediaOrigin(BaseModel):
     notes: str = ""
     metadata_summary: dict[str, Any] = Field(default_factory=dict)
     provenance: list[str] = Field(default_factory=list)
-    detector_used: str = "none — no AI-detector claimed"
+    detector_used: str = "none, no AI-detector claimed"
 
 
 class OriginalityResult(BaseModel):
@@ -233,7 +238,7 @@ class DeepfakeAssessment(BaseModel):
     signals: list[ForensicSignal] = Field(default_factory=list)
     detector_used: str = (
         "local forensic signal ensemble (frame reuse, recompression "
-        "error, temporal transitions, provenance sparsity) — no "
+        "error, temporal transitions, provenance sparsity), no "
         "synthetic-media classifier was run")
     limitations: str = (
         "Signals are weak local proxies, not proof of manipulation or "

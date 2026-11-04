@@ -2,7 +2,7 @@
 the on_terminal callback that drives async webhooks (Bug 4).
 
 All runs use a fake service.run against a real (demo-mode, SQLite) job
-store — no provider calls, no network, no credits.
+store, no provider calls, no network, no credits.
 """
 from __future__ import annotations
 

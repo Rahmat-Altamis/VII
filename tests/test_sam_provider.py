@@ -1,6 +1,6 @@
 """SAM 3.1 adapter: wire-grammar parser, provider, pipeline demo guard.
 
-Fake transport only — no live calls, no credits. Wire samples follow the
+Fake transport only, no live calls, no credits. Wire samples follow the
 documented grammar (Meta SAM 3.1 docs): one line per frame,
 ``<Nf>id<|box;...|><|mask;...;data=H,W,ENC PAYLOAD|>``, stable object
 ids across frames, empty output_text = zero matches (valid outcome).
@@ -62,7 +62,7 @@ def test_parse_sam_output_records_and_mask_artifacts(tmp_path):
     assert first.observation_type == "segmentation"
     assert first.label == "red bicycle"
     assert first.sampling_mode == "native_video"
-    assert first.timestamp_ms is None  # fps unknown — never invented
+    assert first.timestamp_ms is None  # fps unknown, never invented
     assert first.request_id == "resp_test"
     assert first.geometry["x1"] == 211 and first.geometry["w"] == 320
     assert first.geometry["confidence"] == 0.91

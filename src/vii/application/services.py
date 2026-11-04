@@ -24,7 +24,8 @@ class AnalysisService:
     def get(self, job_id: str, consumer: str | None = None) -> dict | None:
         with self.Session() as db:
             job = JobRepo(db).get(job_id)
-            if not job: return None
+            if not job:
+                return None
             if consumer and str(job.consumer) != consumer:
                 return None  # consumer isolation: no cross-consumer reads
             return self._detail(db, job)
@@ -59,14 +60,18 @@ class AnalysisService:
             "claims": claims,
             "evidence": [{"url": e.url, "title": e.title, "snippet": e.snippet,
                           "publisher": e.publisher, "method": e.method,
+                          "relationship": e.relationship or "",
+                          "publication_date": e.publication_date or "",
+                          "retrieved_at": (e.retrieved_at.isoformat()
+                                           if e.retrieved_at else ""),
                           "claim_id": e.claim_id} for e in repo.evidence_for_job(job.id)],
             "citations": [{"url": c.url, "span": c.cited_span, "claim_id": c.claim_id}
                           for c in repo.citations_for_job(job.id)],
             "transcript": [{"start_s": s.start_s, "end_s": s.end_s, "text": s.text,
                             "speaker": s.speaker, "engine": s.engine}
                            for s in repo.segments_for_job(job.id)],
-            "log": [{"stage": l.stage, "level": l.level, "message": l.message,
-                     "at": l.created_at.isoformat()} for l in JobRepo(db).logs(job.id)],
+            "log": [{"stage": entry.stage, "level": entry.level, "message": entry.message,
+                     "at": entry.created_at.isoformat()} for entry in JobRepo(db).logs(job.id)],
         }
 
     def diagnostics(self) -> dict:

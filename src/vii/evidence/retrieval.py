@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from vii.domain.enums import SearchMethod
-from vii.domain.schemas import CitationAnnotation, SearchResultItem
+from vii.domain.schemas import SearchResultItem
 from vii.meta import response_parser as rp
 from vii.meta.search import build_search_payload, offline_note
 
@@ -18,12 +18,12 @@ if TYPE_CHECKING:
 
 
 def no_search_stub(query: str) -> tuple[list[SearchResultItem], str]:
-    """Explicit no-search result — never presented as live evidence."""
+    """Explicit no-search result, never presented as live evidence."""
     return [], f"NO SEARCH PERFORMED (no live provider client) for: {query[:120]}"
 
 
-def search_claim(query: str, claim_id: str, settings: "Settings",
-                 client: "MetaClient | None" = None) -> dict:
+def search_claim(query: str, claim_id: str, settings: Settings,
+                 client: MetaClient | None = None) -> dict:
     """Returns {results, citations, response_id, performed, offline, note}."""
     if client is None or not client.live:
         _, note = no_search_stub(query)

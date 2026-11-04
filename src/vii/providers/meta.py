@@ -1,9 +1,9 @@
-"""Meta provider adapter (Muse Spark) — compatibility layer over vii.meta.
+"""Meta provider adapter (Muse Spark), compatibility layer over vii.meta.
 
 The single Meta transport in this codebase is vii.meta.client.MetaClient
 (Responses API at META_BASE_URL, default https://api.meta.ai/v1). The previous
 revision of this file targeted ``api.llama.com/compat/v1`` chat-completions;
-that path is removed — it is not the documented Muse Spark endpoint and it
+that path is removed, it is not the documented Muse Spark endpoint and it
 duplicated the client. This module keeps the legacy Provider interface
 (describe/extract/search/verify) so older call sites keep working, delegating
 every call to the active Responses API implementation.
@@ -83,7 +83,7 @@ class MetaProvider:
         instructions = context.get("instructions")
         if not video_url and not file_id:
             raise MetaError("describe_video needs context['video_url'] or context['file_id'] "
-                            "(native video input — frame stills are not used here).")
+                            "(native video input, frame stills are not used here).")
         payload = (build_url_payload(video_url, self.model, instructions) if video_url
                    else build_file_id_payload(file_id, self.model, instructions))
         try:
@@ -158,7 +158,8 @@ class MetaProvider:
             flag = "cited by model" if r.url in cited_urls else "retrieved, not model-cited"
             out.append(RetrievedSource(
                 title=r.title, publisher=r.publisher or "", url=r.url,
-                published_at="", excerpt=r.snippet, relation="context",
+                published_at=r.publication_date, excerpt=r.snippet,
+                relation=r.relationship or "context",
                 credibility_note=f"Retrieved via Meta web_search (response {r.search_response_id or rid}); {flag}.",
                 retrieval_method="meta_web_search"))
         return out
@@ -171,7 +172,7 @@ class MetaProvider:
                 evidence_indexes=[],
                 method=f"meta {self.model}: no-evidence rule")
         ev_lines = "\n".join(
-            f"[{i}] {s.title} ({s.publisher}) — {s.excerpt[:400]} [{s.url}]"
+            f"[{i}] {s.title} ({s.publisher}), {s.excerpt[:400]} [{s.url}]"
             for i, s in enumerate(sources))
         prompt = (
             "You verify a claim ONLY against the numbered sources below. Cite source numbers. "

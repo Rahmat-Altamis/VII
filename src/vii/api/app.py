@@ -56,9 +56,10 @@ async def _request_id(request: Request, call_next):
 @app.get("/ready")
 def ready():
     """Readiness: DB reachable + storage dir writable. Liveness is /health."""
+    from sqlalchemy import text as _text
+
     from vii.config import get_settings
     from vii.persistence.db import make_engine
-    from sqlalchemy import text as _text
     s = get_settings()
     checks: dict[str, bool] = {}
     try:

@@ -11,12 +11,12 @@ This EXTENDS ``vii.dataset`` alongside the CSV inbox in
 Safety invariants enforced here (not left to convention):
 
 * every record must declare ``sample_origin == "synthetic"`` and
-  ``is_synthetic is True`` — a record claiming any other origin is rejected,
+  ``is_synthetic is True``, a record claiming any other origin is rejected,
   so a benchmark case cannot silently pass as a real sample;
 * ``to_verified_finding`` always refuses: a synthetic case can never be
   converted into, or displayed as, a real verified finding;
 * ``media_reference`` must be null and ``reference_sources`` must be empty
-  in v0.1 — no asset has been examined and no source has been verified, so
+  in v0.1, no asset has been examined and no source has been verified, so
   records may not imply either;
 * ``expected_confidence_behavior`` is calibrated *behavior* prose and may
   not contain a fabricated numeric probability (percent or 0.x figure).
@@ -240,7 +240,7 @@ def validate_records(records: list[Any], path: str = "<records>") -> BenchmarkRe
 
 def load_benchmark(path: str | Path) -> BenchmarkReport:
     """Load and validate a benchmark JSONL file. Missing file is reported,
-    not raised — mirroring vii.dataset.ingestion.validate_csv."""
+    not raised, mirroring vii.dataset.ingestion.validate_csv."""
     p = Path(path)
     report = BenchmarkReport(path=str(p), exists=p.is_file())
     if not report.exists:

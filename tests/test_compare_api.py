@@ -2,7 +2,7 @@
 from the persisted ``phashes`` lists, never from corpus record names
 (``phash_matches[*].record`` like "known1" is not a hash).
 
-Local fixtures only — no provider calls, no network.
+Local fixtures only, no provider calls, no network.
 """
 from __future__ import annotations
 

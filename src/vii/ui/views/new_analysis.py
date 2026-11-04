@@ -1,8 +1,17 @@
 """New Analysis view: local MP4 or public URL, metadata preview, start."""
 from __future__ import annotations
 
-from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
-                               QMessageBox, QPushButton, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (
+    QComboBox,
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 
 class NewAnalysisView(QWidget):
@@ -11,23 +20,33 @@ class NewAnalysisView(QWidget):
         self._service = service
         self._on_started = on_started
         lay = QVBoxLayout(self)
-        t = QLabel("New Analysis"); t.setObjectName("h1"); lay.addWidget(t)
+        t = QLabel("New Analysis")
+        t.setObjectName("h1")
+        lay.addWidget(t)
 
         lay.addWidget(QLabel("Input type:"))
-        self.kind = QComboBox(); self.kind.addItems(["Local MP4 file", "Public video URL"])
+        self.kind = QComboBox()
+        self.kind.addItems(["Local MP4 file", "Public video URL"])
         self.kind.currentIndexChanged.connect(self._toggle)
         lay.addWidget(self.kind)
 
         row = QHBoxLayout()
-        self.path = QLineEdit(); self.path.setPlaceholderText("/path/to/video.mp4  or  https://…")
-        self.browse = QPushButton("Browse…"); self.browse.clicked.connect(self._browse)
-        row.addWidget(self.path); row.addWidget(self.browse)
+        self.path = QLineEdit()
+        self.path.setPlaceholderText("/path/to/video.mp4  or  https://…")
+        self.browse = QPushButton("Browse…")
+        self.browse.clicked.connect(self._browse)
+        row.addWidget(self.path)
+        row.addWidget(self.browse)
         lay.addLayout(row)
-        self.meta = QLabel(""); self.meta.setObjectName("dim"); lay.addWidget(self.meta)
+        self.meta = QLabel("")
+        self.meta.setObjectName("dim")
+        lay.addWidget(self.meta)
 
-        self.title = QLineEdit(); self.title.setPlaceholderText("Title (optional)")
+        self.title = QLineEdit()
+        self.title.setPlaceholderText("Title (optional)")
         lay.addWidget(self.title)
-        self.run_btn = QPushButton("Start Analysis"); self.run_btn.clicked.connect(self._start)
+        self.run_btn = QPushButton("Start Analysis")
+        self.run_btn.clicked.connect(self._start)
         lay.addWidget(self.run_btn)
         lay.addStretch(1)
         self._toggle()

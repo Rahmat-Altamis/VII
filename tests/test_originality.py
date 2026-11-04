@@ -3,7 +3,7 @@
 Before the fix, `assess_originality` referenced an undefined `digest`
 name in the corpus loop and return statement, raising NameError for
 every local-file input (remote URLs returned early and hid the bug).
-These tests use synthetic byte fixtures only — no video content.
+These tests use synthetic byte fixtures only, no video content.
 """
 from __future__ import annotations
 

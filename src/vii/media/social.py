@@ -1,6 +1,6 @@
 """Instagram / Facebook URL recognition and supported acquisition paths.
 
-Honesty rules (product decision — no unofficial downloaders):
+Honesty rules (product decision, no unofficial downloaders):
 - A post/watch-page URL is NOT a directly consumable media URL. Only direct
   media hosts (fbcdn / scontent / instagram cdn .mp4) can be offered to Meta
   native input; page URLs go through authorized platform APIs (Instagram Graph

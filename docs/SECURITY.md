@@ -1,78 +1,90 @@
-# Security
+# Security Model
 
-VII handles untrusted URLs, uploaded media, and API credentials. Security is
-enforced in code (fail-closed), not just documented here. This file describes
-the boundaries; `tests/test_auth_hardening.py` is the executable proof for
-the authentication rules.
+## Threat model
 
-## Authentication & consumer isolation
+1. Untrusted video bytes, container metadata, URLs, filenames, and
+   webhook callbacks are hostile input.
+2. Operator credentials (`MODEL_API_KEY`, service keys, DB URLs) must
+   never reach logs, reports, error messages, or tracked files.
+3. Consumers of the API server are mutually untrusted. Data must not
+   leak across consumers.
+4. The provider network path is trusted but metered, so every call
+   goes through budgets, short timeouts, and typed errors.
 
-- **Loopback-only unauthenticated dev.** With `VII_REQUIRE_AUTH=false`, the
-  configured bind host must be loopback (`127.0.0.0/8`, `::1`, `localhost`,
-  including numeric shorthands) — `Settings` raises at startup otherwise.
-  Non-loopback binds require `VII_REQUIRE_AUTH=true` **with** keys configured
-  (`VII_API_KEYS` and/or well-formed `VII_CONSUMER_KEYS`); malformed-only
-  values count as none.
-- **Identity.** `VII_CONSUMER_KEYS` (`name:key`) gives stable operator-assigned
-  consumer names. Bare `VII_API_KEYS` derive identity as
-  `key-<full 64-hex SHA-256>` — collision-resistant, stable across restarts,
-  and the raw key never appears in logs, responses, or stored records.
-- **No header spoofing.** With auth enabled, `X-Consumer` alone authenticates
-  nobody, and a valid key + forged `X-Consumer` still resolves to the key's
-  identity. Cross-consumer job/dataset/report access returns `404`.
-- **Legacy routes** enforce the same identity as `/v1` (they previously
-  ignored auth entirely — fixed; see `docs/API.md`).
+## Credential sources
 
-## Secrets
+Provider key precedence (first hit wins):
 
-- Keys come from env (`MODEL_API_KEY`, tokens) or the OS keyring via
-  `vii.keystore` (0600-file fallback under the storage dir). Never committed,
-  never in `.env` when saved from Settings (stored in keyring instead).
-- `vii.logging_setup` redacts key/token material from all `vii.*` logs;
-  `Settings.redacted()` exposes only counts/sources. Diagnostics endpoints
-  return redacted settings only.
-- Fixtures/docs use synthetic values (`sk-...` placeholders) exclusively.
+1. Explicit key argument (library `VII(api_key=...)`, MCP
+   `api_key` field).
+2. `MODEL_API_KEY` env var.
+3. OS keyring entry.
+4. `~/.vii/credentials.json` with mode `0600`.
 
-## Input, SSRF & outbound requests
+Consumer identity (VII API server callers) is separate:
+`VII_CONSUMER_KEYS` mapping (`name:key`), `VII_API_KEYS`
+(list), or single `VII_API_KEY`. When auth is off, identity comes
+from the `X-Consumer` header or `VII_CONSUMER_ID`.
 
-- **Source URLs** pass `vii.media.ingestion._ssrf_check`: localhost,
-  private/loopback/link-local/multicast/reserved resolutions are refused.
-  Page URLs (Instagram/Facebook posts) are never fetched with unofficial
-  downloaders — only authorized platform APIs or a required local upload.
-- **Webhooks** are disabled by default (`VII_WEBHOOK_ENABLED=true` to enable).
-  Targets must be public http(s): localhost/private/link-local/metadata IPs,
-  internal suffixes, and all redirects are refused, with host re-validation
-  after any response. Payloads are HMAC-signed.
-- **Uploads** stream in 1 MiB chunks with the `VII_MAX_UPLOAD_MB` cap enforced
-  during the write (partial files deleted on overflow), extension allowlist,
-  server-generated filenames. No user-controlled path is ever written.
-- **Dataset `local_path`** must resolve under `VII_STORAGE_DIR`; arbitrary
-  server paths are refused. Dataset CSV paths come from operator config
-  (`DATASET_CSV_PATH`), not request input.
+## Onboarding a new key
 
-## Media & process safety
+CLI (interactive, confirmation shown, secret never echoed):
 
-- FFmpeg/ffprobe run via `subprocess` with `shell=False`, argument lists,
-  and timeouts (`vii.media.ffmpeg`). No shell interpolation of filenames.
-- Original uploads are preserved; converted derivatives are separate files
-  with separate SHA-256 hashes. Originality checks use exact + perceptual
-  hashes, never a fabricated AI-detector verdict.
+```bash
+vii credentials set     # prompts, validates, stores
+vii credentials status  # source, endpoint, readiness tiers
+vii credentials test    # safe live ping, only if explicitly run
+```
 
-## Database & workers
+The TUI offers the same flow via `/key set`. The desktop Settings
+dialog supports view, update, and remove, with masked display.
 
-- All DB access is parameterized ORM via repositories — no string-built SQL.
-- Worker retries are bounded (`max_retries=2`), failures persisted to
-  `processing_logs`, cancellation is cooperative and consumer-checked at the
-  API layer. Worker threads are daemons scoped to the app lifespan.
-- Reports/exports live under `storage_dir/exports/` with job-id filenames;
-  report reads are consumer-checked before any file is served.
+## Secret handling rules
 
-## Known limits (honest)
+1. Never print or log the raw secret. `vii.logging_setup` redacts
+   bearer tokens and key patterns at the handler level.
+2. `/diagnostics` and `/status` expose source and shape only
+   (presence, length class), never the value.
+3. `.env.example` stays blank. Live `.env` is untracked and must
+   never be staged. Tracked files are scanned for key patterns
+   before release.
+4. Credential stores are created with restrictive permissions
+   (`0600` files, `0700` dirs). The remove command deletes
+   both keyring and fallback entries.
 
-- Live Meta integration (Responses API `input_video`/`file_id`, web search,
-  transcription shapes) is **mock-verified only** in this environment — no
-  credentials were available. Treat live behavior as unverified until the
-  opt-in checks in `docs/DEVELOPMENT.md` are run.
-- No rate limiting or request-size middleware beyond the upload cap exists
-  yet; put a reverse proxy in front for internet-facing deployments.
-- S3 storage (`vii.storage`) is an optional backend; local disk is default.
+## Input hardening (implemented)
+
+1. URL ingestion: http and https only, DNS resolved and rejected on
+   global address fail closed on DNS error, redirects revalidated
+   (max 5), non HTML content sniffed, max body cap.
+2. Uploads: extension allowlist, magic byte sniffing, max size cap
+   enforced during streaming, randomized storage name.
+3. Local paths (UI, CLI, MCP, library): existence, readability,
+   size, extension, and container signature checks before any
+   provider call. Symlinks are resolved; traversal outside the
+   allowed root is rejected.
+4. Webhooks: disabled unless `VII_WEBHOOK_ENABLED=true`, callback
+   URLs SSRF validated, HMAC signed with `VII_WEBHOOK_SECRET`,
+   verified with `hmac.compare_digest`.
+5. API startup: `VII_REQUIRE_AUTH=true` without configured keys, or
+   a bypass bind without auth, fails fast instead of serving open.
+6. Concurrency: a singleton DB lock guards the SQLite dev path so
+   parallel writes serialize safely.
+
+## Live verification status
+
+Provider call paths (upload, responses, transcription, search) are
+live verified against the Meta Model API during the pilot runs;
+see `data/evaluation/real_world_pilot/runs/` for redacted session
+evidence. The routine test suite stays offline with mocked
+transports and asserts secret redaction across log emitters. The
+desktop UI remains mock backed and is not part of the verified
+live path.
+
+## Not covered
+
+1. No per consumer rate limiting yet. Loopback throttle exists for
+   abuse resistance.
+2. No cost dashboard. Token and cost fields are recorded when the
+   provider returns them, else explicitly absent.
+3. Transcription session ids are logged but not persisted per job.

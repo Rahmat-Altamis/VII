@@ -19,12 +19,15 @@ from vii.errors import ProviderConfigurationError, ProviderError
 
 router = APIRouter()
 _service: AnalysisService | None = None
+_lock = __import__("threading").Lock()
 
 
 def svc() -> AnalysisService:
     global _service
     if _service is None:
-        _service = AnalysisService(get_settings())
+        with _lock:
+            if _service is None:
+                _service = AnalysisService(get_settings())
     return _service
 
 
@@ -91,5 +94,5 @@ def get_report(job_id: str, format: str = "markdown",
     ext = "md" if format == "markdown" else "json"
     path = Path(s.storage_dir) / "exports" / f"{job_id}.{ext}"
     if not path.exists():
-        raise HTTPException(404, "report not generated yet — run the analysis first")
+        raise HTTPException(404, "report not generated yet, run the analysis first")
     return path.read_text()

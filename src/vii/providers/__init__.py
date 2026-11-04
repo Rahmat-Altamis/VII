@@ -6,10 +6,10 @@ Provider / describe / extract / search / verify interface on top of the active
 implementation:
 
 - MockProvider: synthetic deterministic fixtures, explicit opt-in only via
-  get_provider("mock") — never a default or a fallback for a missing key.
+  get_provider("mock"), never a default or a fallback for a missing key.
 - MetaProvider: delegates to vii.meta.client.MetaClient (Responses API at
   META_BASE_URL). The old api.llama.com/compat/v1 chat-completions path was
-  removed — it is not the documented Muse Spark endpoint and duplicated the
+  removed, it is not the documented Muse Spark endpoint and duplicated the
   client. Exactly one Meta transport exists: vii.meta.client.
 """
 from __future__ import annotations

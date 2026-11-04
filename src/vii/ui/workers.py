@@ -22,5 +22,5 @@ class AnalysisWorker(QThread):
         try:
             result = self._service.run(self._job_id, _cb)
             self.signals.finished.emit(self._job_id, result, None)
-        except Exception as e:  # noqa: BLE001 — forwarded to UI
+        except Exception as e:  # noqa: BLE001, forwarded to UI
             self.signals.finished.emit(self._job_id, None, e)

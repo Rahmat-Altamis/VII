@@ -80,6 +80,27 @@ def metadata_summary(probed: dict) -> dict:
     }
 
 
+def extract_audio_wav(src: str | Path, dst: str | Path, ffmpeg_bin: str = "ffmpeg",
+                      sample_rate: int = 24000,
+                      start_s: float = 0.0, end_s: float | None = None) -> Path:
+    """Extract a transcription-ready WAV: mono, 16-bit PCM, 24 kHz default.
+
+    Window [start_s, end_s) preserves timeline alignment; the caller adds
+    start_s as the segment offset. Matches the documented conversion:
+    mono PCM WAV at 16 or 24 kHz.
+    """
+    dst = Path(dst)
+    cmd = [ffmpeg_bin, "-y", "-v", "error", "-ss", str(max(0.0, start_s))]
+    if end_s is not None:
+        cmd += ["-to", str(end_s)]
+    cmd += ["-i", str(src), "-ac", "1", "-ar", str(sample_rate),
+            "-c:a", "pcm_s16le", "-map_metadata", "-1", str(dst)]
+    p = _run(cmd)
+    if p.returncode != 0 or not dst.exists():
+        raise FFmpegError(f"audio extraction failed: {p.stderr[:500]}")
+    return dst
+
+
 def extract_audio(src: str | Path, dst: str | Path, ffmpeg_bin: str = "ffmpeg",
                   sample_rate: int = 16000) -> Path:
     dst = Path(dst)
@@ -111,7 +132,8 @@ def thumbnail(src: str | Path, dst: str | Path, at_s: float = 1.0,
 
 def sample_frames(src: str | Path, out_dir: str | Path, fps: float = 0.2,
                   max_frames: int = 12, ffmpeg_bin: str = "ffmpeg") -> list[Path]:
-    out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
     p = _run([ffmpeg_bin, "-y", "-v", "error", "-i", str(src),
               "-vf", f"fps={fps}", "-frames:v", str(max_frames),
               str(out / "frame_%03d.jpg")])

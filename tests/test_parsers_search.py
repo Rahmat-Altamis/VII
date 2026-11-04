@@ -1,7 +1,7 @@
 """Areas 7, 9-13: response parsing, raw results, url_citation, association."""
 import json
 
-from vii.domain.schemas import ClaimIn, SearchResultItem
+from vii.domain.schemas import SearchResultItem
 from vii.evidence import validation as vmod
 from vii.evidence.sources import credibility_tier
 from vii.meta import response_parser as rp

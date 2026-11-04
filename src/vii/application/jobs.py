@@ -18,9 +18,11 @@ class JobRunner:
         def _target():
             try:
                 result = self.service.run(job_id, progress)
-                if done: done(job_id, result, None)
-            except Exception as e:  # noqa: BLE001 — surfaced to UI
-                if done: done(job_id, None, e)
+                if done:
+                    done(job_id, result, None)
+            except Exception as e:  # noqa: BLE001, surfaced to UI
+                if done:
+                    done(job_id, None, e)
         t = threading.Thread(target=_target, daemon=True)
         t.start()
         return t

@@ -70,7 +70,7 @@ def fetch_media(url: str, token: str, timeout_s: float = 30.0) -> dict:
                     "created_time": data.get("created_time", ""),
                     "auth_method": "facebook_page_api",
                     "status": r.status_code, "media_binary_acquired": True}
-    except Exception as e:  # network/timeout — surface, never silent
+    except Exception as e:  # network/timeout, surface, never silent
         log.warning("facebook fetch failed: %s", str(e)[:200])
         return {"ok": False, "platform": "facebook", "kind": info["kind"],
                 "post_id": post_id,

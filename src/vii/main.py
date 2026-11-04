@@ -34,12 +34,17 @@ def main(argv: list[str] | None = None) -> int:
         return ingest_only(argv[i + 1])
     if "--demo" in argv:
         return demo()
-    from vii.ui.main_window import run_app
-    return run_app()
+    if "--ui" in argv:
+        from vii.ui.main_window import run_app
+        return run_app()
+    # Default surface is the terminal client: no PySide6 import.
+    from vii.cli import interactive
+    return interactive()
 
 
 def _dataset_path(explicit: str | None):
     from pathlib import Path
+
     from vii.config import get_settings
     return Path(explicit) if explicit else get_settings().dataset_csv_path
 
@@ -49,6 +54,7 @@ def validate_dataset(path: str | None = None) -> int:
     file is valid or absent (absence is a normal pre-dataset state); exit 2
     when the file exists but has schema/row errors."""
     import json as _json
+
     from vii.dataset.ingestion import validate_csv
     report = validate_csv(_dataset_path(path))
     print(_json.dumps(report.as_dict(), indent=2))
@@ -60,9 +66,10 @@ def ingest_dataset(path: str | None = None, apply: bool = False) -> int:
 
     Never starts video analysis. Exit 2 when validation fails."""
     import json as _json
+
+    from vii.config import get_settings
     from vii.dataset.ingestion import ingest_csv
     from vii.persistence.db import init_db
-    from vii.config import get_settings
     s = get_settings()
     session_factory = init_db(s.database_url, s.storage_dir)
     result = ingest_csv(_dataset_path(path), session_factory,
@@ -100,10 +107,11 @@ def demo() -> int:
 
     Uses deterministic fixtures only; this is not real provider-backed
     analysis and is labeled as such in every output."""
+    import tempfile
+
     from vii.application.services import AnalysisService
     from vii.config import Settings
     from vii.domain.schemas import AnalysisCreate
-    import tempfile, os
     tmp = tempfile.mkdtemp(prefix="vii_demo_")
     s = Settings(VII_DEMO_MODE=True, VII_DATABASE_URL=f"sqlite:///{tmp}/vii.db",
                  VII_STORAGE_DIR=tmp)

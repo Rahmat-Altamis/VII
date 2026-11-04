@@ -18,7 +18,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import vii.media.ffmpeg as ffmpeg_mod
-from vii.domain.enums import AcquisitionMethod, SourceKind
+from vii.domain.enums import SourceKind
 from vii.domain.schemas import MediaIngestionResult, VideoSourceIn
 from vii.errors import (
     InvalidUploadError,
@@ -57,18 +57,26 @@ def validate_source(src: VideoSourceIn, max_mb: int, storage: Path) -> dict:
 
 
 def _ssrf_check(host: str, url: str) -> None:
-    """Block private/loopback/link-local targets for any server-side fetch."""
+    """Block non-global targets for any server-side fetch (fail-closed).
+
+    ``is_global`` is the single test: it rejects private, loopback,
+    link-local, multicast, reserved, CGNAT and documentation ranges.
+    A DNS failure or an empty answer rejects the URL here instead of
+    deferring to fetch time.
+    """
     if not host:
         raise ValueError("URL has no host")
     if host.lower() in ("localhost",):
         raise ValueError("SSRF guard: localhost URLs are not allowed")
     try:
         infos = socket.getaddrinfo(host, None, family=socket.AF_UNSPEC)
-    except socket.gaierror:
-        return  # DNS failure surfaces later at fetch time, not here
-    for fam, _, _, _, sockaddr in infos:
+    except (socket.gaierror, UnicodeError) as e:
+        raise ValueError(f"SSRF guard: cannot resolve host {host!r}") from e
+    if not infos:
+        raise ValueError(f"SSRF guard: cannot resolve host {host!r}")
+    for _fam, _, _, _, sockaddr in infos:
         ip = ipaddress.ip_address(sockaddr[0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
+        if not ip.is_global or str(ip) in ("169.254.169.254",):
             raise ValueError(f"SSRF guard: {host} resolves to non-public IP")
 
 
@@ -91,14 +99,14 @@ def ensure_mp4(src_path: str | Path, storage: Path, ffmpeg_bin: str,
 # This path deliberately imports no provider, pipeline, worker, or
 # persistence module: validating media must be testable without credentials
 # and must never spend provider credits. FFmpeg/ffprobe are optional
-# enrichment only — a supported native MP4 is fully validated without them.
+# enrichment only, a supported native MP4 is fully validated without them.
 
 _EXT_CONTAINER = {
     ".mp4": "mp4", ".m4v": "mp4", ".mov": "mov",
     ".mkv": "mkv", ".webm": "webm", ".avi": "avi",
 }
 # Signature families: an .mkv and a .webm share the EBML header, and an
-# .m4v is an MP4 brand — family match is what the signature can prove.
+# .m4v is an MP4 brand, family match is what the signature can prove.
 _CONTAINER_FAMILY = {
     "mp4": "mp4", "mov": "mp4", "mkv": "ebml", "webm": "ebml", "avi": "avi",
 }

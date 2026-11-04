@@ -52,7 +52,7 @@ class Worker:
 
     # -- enqueue ---------------------------------------------------------
     def enqueue(self, job_id: str, *, force: bool = False) -> dict:
-        """Submit job_id; idempotent — running/terminal jobs are not re-run.
+        """Submit job_id; idempotent, running/terminal jobs are not re-run.
 
         ``force=True`` is reserved for restart recovery: a job still marked
         in a running state after a process restart has no live executor, so
@@ -103,7 +103,7 @@ class Worker:
         if not owned:
             # No executor will observe this cancellation (job not queued
             # or running here), so the terminal callback fires here;
-            # an owning executor fires it instead — exactly once overall.
+            # an owning executor fires it instead, exactly once overall.
             self._notify_terminal(job_id, status)
         return {"job_id": job_id, "status": status, "cancelled": True}
 
@@ -187,7 +187,7 @@ class Worker:
                                  f"{str(e)[:300]}", "warning")
                     elif retryable:
                         repo.log(job_id, "worker",
-                                 f"attempt {attempt + 1} failed: {str(e)[:300]} — retrying",
+                                 f"attempt {attempt + 1} failed: {str(e)[:300]}, retrying",
                                  "warning")
                     else:
                         repo.set_status(job, JobStatus.FAILED)

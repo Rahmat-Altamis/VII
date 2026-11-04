@@ -1,7 +1,7 @@
 """SQLAlchemy ORM models (SQLite default, PostgreSQL-compatible)."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -12,7 +12,7 @@ class Base(DeclarativeBase):
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class AnalysisJob(Base):
@@ -28,8 +28,8 @@ class AnalysisJob(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
-    sources: Mapped[list["VideoSource"]] = relationship(back_populates="job", cascade="all, delete-orphan")
-    claims: Mapped[list["Claim"]] = relationship(back_populates="job", cascade="all, delete-orphan")
+    sources: Mapped[list[VideoSource]] = relationship(back_populates="job", cascade="all, delete-orphan")
+    claims: Mapped[list[Claim]] = relationship(back_populates="job", cascade="all, delete-orphan")
 
 
 class VideoSource(Base):
@@ -64,7 +64,7 @@ class Claim(Base):
     start_s: Mapped[float] = mapped_column(Float, nullable=True)
     end_s: Mapped[float] = mapped_column(Float, nullable=True)
     job: Mapped[AnalysisJob] = relationship(back_populates="claims")
-    assessment: Mapped["ClaimAssessment | None"] = relationship(back_populates="claim", cascade="all, delete-orphan", uselist=False)
+    assessment: Mapped[ClaimAssessment | None] = relationship(back_populates="claim", cascade="all, delete-orphan", uselist=False)
 
 
 class EvidenceSource(Base):
@@ -77,6 +77,8 @@ class EvidenceSource(Base):
     snippet: Mapped[str] = mapped_column(Text, default="")
     publisher: Mapped[str] = mapped_column(String(256), default="")
     method: Mapped[str] = mapped_column(String(64), default="")
+    relationship: Mapped[str] = mapped_column(String(32), default="")
+    publication_date: Mapped[str] = mapped_column(String(64), default="")
     search_response_id: Mapped[str] = mapped_column(String(128), default="")
     retrieved_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 

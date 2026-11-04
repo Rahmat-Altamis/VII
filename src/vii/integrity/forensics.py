@@ -3,17 +3,17 @@
 This is VII's deepfake/manipulation surface. It evaluates weak local
 proxies over sampled frames and provenance metadata:
 
-- ``frame_reuse`` — a sampled frame that reappears (near-identical
+- ``frame_reuse``, a sampled frame that reappears (near-identical
   perceptual hash) at a non-consecutive position, consistent with
   looped or re-inserted segments;
-- ``recompression_error`` — error-level-style analysis: frames are
+- ``recompression_error``, error-level-style analysis: frames are
   re-encoded as JPEG and the mean absolute error is measured. Elevated
   error can indicate compositing or repeated re-encoding, but every
   platform re-encode raises it too;
-- ``temporal_transitions`` — share of abrupt perceptual transitions
+- ``temporal_transitions``, share of abrupt perceptual transitions
   between consecutive sampled frames (heavy editing and ordinary scene
   cuts both fire this);
-- ``provenance_metadata`` — whether container/codec metadata survived;
+- ``provenance_metadata``, whether container/codec metadata survived;
   platforms strip it from genuine media routinely.
 
 The aggregated status is categorical (``signals_detected`` /
@@ -149,7 +149,7 @@ def _recompression_signal(frames: list[Path]) -> ForensicSignal:
             detail=(f"Mean JPEG re-encode error {value:.1f} exceeds "
                     f"{_ELA_SIGNAL_THRESHOLD:.0f}; consistent with "
                     "compositing or repeated re-encoding. Platform "
-                    "re-encodes fire this on genuine media — weak proxy "
+                    "re-encodes fire this on genuine media, weak proxy "
                     "only."))
     return ForensicSignal(
         name="recompression_error", status="no_signal", value=value,
@@ -194,7 +194,7 @@ def _provenance_signal(metadata: dict | None) -> ForensicSignal:
             name="provenance_metadata", status="signal",
             detail=("No container/codec metadata available; provenance "
                     "is sparse. Platforms strip metadata from genuine "
-                    "media routinely — this is not manipulation "
+                    "media routinely, this is not manipulation "
                     "evidence on its own."))
     return ForensicSignal(
         name="provenance_metadata", status="no_signal",

@@ -1,7 +1,7 @@
 """Public library API: ``from vii import VII`` and the export surface.
 
 These tests exercise the supported downstream contract only. They use
-synthetic byte fixtures and mocked application services — no real API
+synthetic byte fixtures and mocked application services, no real API
 keys, no network, no provider credits, no real video content.
 """
 from __future__ import annotations
@@ -39,7 +39,7 @@ def _client(tmp_path, **overrides) -> VII:
         "VII_STORAGE_DIR": tmp_path,
     }
     kw.update(overrides)
-    return VII(settings=Settings(**kw))
+    return VII(settings=Settings(_env_file=None, **kw))
 
 
 def test_public_export_surface_is_deliberate():
@@ -87,7 +87,7 @@ def test_settings_and_overrides_are_mutually_exclusive(tmp_path):
     from vii.config import Settings
 
     with pytest.raises(ValueError, match="not both"):
-        VII("some-key", settings=Settings(VII_STORAGE_DIR=tmp_path))
+        VII("some-key", settings=Settings(_env_file=None, VII_STORAGE_DIR=tmp_path))
 
 
 def test_inspect_media_and_sha256_via_client(tmp_path):

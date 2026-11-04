@@ -1,8 +1,15 @@
 """Analysis History view: list + detail tabs (overview..export)."""
 from __future__ import annotations
 
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-                               QSplitter, QTabWidget, QTextEdit, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QListWidget,
+    QListWidgetItem,
+    QSplitter,
+    QTabWidget,
+    QTextEdit,
+    QWidget,
+)
 
 
 class HistoryView(QWidget):
@@ -11,16 +18,19 @@ class HistoryView(QWidget):
         self._service = service
         lay = QHBoxLayout(self)
         split = QSplitter()
-        self.list = QListWidget(); self.list.setMaximumWidth(320)
+        self.list = QListWidget()
+        self.list.setMaximumWidth(320)
         self.list.itemClicked.connect(self._show)
         self.tabs = QTabWidget()
         for name in ("Overview", "Video Understanding", "Transcript", "Claims",
                      "Web Evidence", "Verification", "Media Origin",
                      "Originality", "Processing Log"):
-            w = QTextEdit(); w.setReadOnly(True)
+            w = QTextEdit()
+            w.setReadOnly(True)
             self.tabs.addTab(w, name)
             setattr(self, f"tab_{name.split()[0].lower()}", w)
-        split.addWidget(self.list); split.addWidget(self.tabs)
+        split.addWidget(self.list)
+        split.addWidget(self.tabs)
         split.setStretchFactor(1, 1)
         lay.addWidget(split)
         self._jobs: list[dict] = []
@@ -48,10 +58,10 @@ class HistoryView(QWidget):
         d = self._service.get(jid)
         if not d:
             return
-        mode = "SYNTHETIC DEMO — fixtures, not live verification" if d["offline"] else "LIVE Meta API"
+        mode = "SYNTHETIC DEMO, fixtures, not live verification" if d["offline"] else "LIVE Meta API"
         self._set("Overview", f"<h2>{d['title']}</h2><p>Job <code>{d['id']}</code><br>"
                               f"Status: <b>{d['status']}</b> · Mode: {mode}<br>"
-                              f"Source: {d['source_kind']} — {d['source_ref']}<br>"
+                              f"Source: {d['source_kind']}, {d['source_ref']}<br>"
                               f"Acquisition: {d['acquisition_method']}</p>")
         claims_txt = "\n".join(
             f"• [{c['id']}] ({c['kind']}) {c['text']}" for c in d["claims"]) or "(no claims)"
@@ -61,7 +71,7 @@ class HistoryView(QWidget):
         self._set("Transcript", tr)
         self._set("Claims", claims_txt)
         ev = "\n\n".join(f"• {e['title'] or e['url']}\n  {e['url']} ({e['method']}, claim {e['claim_id']})\n"
-                         f"  {e['snippet'][:300]}" for e in d["evidence"]) or "(no sources — offline or no results)"
+                         f"  {e['snippet'][:300]}" for e in d["evidence"]) or "(no sources, offline or no results)"
         self._set("Web", ev)
         ver = "\n\n".join(
             f"• {c['id']}: {c['assessment']['status'] if c['assessment'] else 'not yet analyzed'}\n"
@@ -69,7 +79,7 @@ class HistoryView(QWidget):
         self._set("Verification", ver)
         self._set("Media", f"Acquisition: {d['acquisition_method']}\nRef: {d['source_ref']}")
         self._set("Originality", "(see exported report for SHA-256 / perceptual-hash details)")
-        log = "\n".join(f"[{l['stage']}/{l['level']}] {l['message']}" for l in d["log"])
+        log = "\n".join(f"[{e['stage']}/{e['level']}] {e['message']}" for e in d["log"])
         self._set("Processing", log or "(empty)")
 
     def _set(self, tab_prefix: str, text: str):

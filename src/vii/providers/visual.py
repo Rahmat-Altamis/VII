@@ -1,6 +1,6 @@
 """Visual perception providers (SAM-class detection/segmentation/tracking).
 
-STATUS — local provider IMPLEMENTED, SAM 3.1 adapter IMPLEMENTED:
+STATUS, local provider IMPLEMENTED, SAM 3.1 adapter IMPLEMENTED:
 
 - ``LocalVisualPerceptionProvider`` (``VII_VISUAL_PERCEPTION_PROVIDER=local``)
   is a real, working provider: it samples frames with FFmpeg under a
@@ -21,12 +21,12 @@ STATUS — local provider IMPLEMENTED, SAM 3.1 adapter IMPLEMENTED:
   125 segmentation observations (response model ``sam-3.1``, wire
   format matching the documented grammar), and a full pipeline run
   returned 363 segmentation observations with the job succeeded and
-  mask payloads stored under ``visual_masks/`` — see
+  mask payloads stored under ``visual_masks/``, see
   ``docs/ARCHITECTURE.md``. Video is billed per frame (50-frame
   minimum per request), so routine tests use a fake transport only.
-- ``UnavailableVisualPerceptionProvider`` — explains the precise reason
+- ``UnavailableVisualPerceptionProvider``, explains the precise reason
   and never returns empty success.
-- ``get_visual_perception_provider`` — deterministic selection from
+- ``get_visual_perception_provider``, deterministic selection from
   settings.
 """
 from __future__ import annotations
@@ -88,7 +88,7 @@ class LocalVisualPerceptionProvider:
     Sampling policy (recorded on every observation): frames are sampled
     at ``fps`` frames/second, at most ``max_frames`` frames, via
     ``vii.media.ffmpeg.sample_frames``. Observations describe sampled
-    frames only — shot segments and inter-frame change — never
+    frames only, shot segments and inter-frame change, never
     continuous object tracking, segmentation masks, or prompt-based
     detection (those require a contract-verified SAM adapter).
     """
@@ -231,7 +231,7 @@ class LocalVisualPerceptionProvider:
 # ENC is "~" (lossless, default) or "!" (one_bit); PAYLOAD is base85 and
 # may itself contain commas or "~"/"!" characters, so a mask token ends
 # only at a "|>" followed by the next record (",<id><|box;") or end of
-# line. Mask payloads are stored verbatim as encoded artifacts — VII
+# line. Mask payloads are stored verbatim as encoded artifacts, VII
 # does not decode them (raster decoding is the official parser's job).
 
 _SAM_BOX_RE = re.compile(
@@ -328,7 +328,7 @@ class SamVisualPerceptionProvider:
     concept. Provider/transport failures are wrapped in the typed
     unavailable error so an optional pipeline stage reports blocked
     instead of failing the whole analysis. Video is billed per frame
-    (50-frame minimum per request) — callers decide when to spend.
+    (50-frame minimum per request), callers decide when to spend.
     """
 
     name = "sam"

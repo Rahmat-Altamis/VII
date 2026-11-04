@@ -1,175 +1,116 @@
-# VII Architecture
+# Architecture
 
-Video Integrity Intelligence (VII) is an API-first, evidence-first engine for
-investigating video integrity, factual claims, and supporting evidence. It is a
-**modular monolith**: one deployable Python process (plus an optional desktop
-UI) with explicit internal boundaries — no microservices, message broker, or
-vector store is required for the current workload.
+VII is a Python service that ingests a video, understands it with a
+hosted model, extracts factual claims, searches the web for evidence,
+assesses each claim, detects spam and AI origin signals, and stores a
+report. Surfaces: an interactive agent TUI, a scriptable CLI, a
+Python library, an HTTP API, four MCP agent tools, and a desktop UI.
 
-## System context
+## Pipeline stages
 
-```
-Operators / API consumers
-        │  HTTP (Bearer service key when VII_REQUIRE_AUTH=true)
-        ▼
-┌────────────────────────── VII process ──────────────────────────┐
-│  FastAPI app (vii.api.app)                                       │
-│    ├─ /v1  consumer contract (vii.api.v1)                        │
-│    └─ /*   legacy unversioned routes (deprecated, same auth)     │
-│  AnalysisService (vii.application.services) ── Pipeline           │
-│    ├─ Ingestion → Video understanding → Transcription            │
-│    ├─ Claim extraction → Evidence search → Assessment            │
-│    └─ Origin / Originality → JSON+Markdown reports               │
-│  Worker (vii.application.worker) — DB-backed ThreadPool          │
-│  Persistence (vii.persistence) — SQLAlchemy 2.x + Alembic        │
-│  Dataset (vii.dataset) — CSV validation + inbox ingestion        │
-└──────────────────────────────────────────────────────────────────┘
-        │                         │
-        ▼                         ▼
-  Meta Model API            FFmpeg / ffprobe
-  (vii.meta adapter)        (vii.media, subprocess, no shell)
-```
+Every analysis job passes through the same ordered stages
+(`src/vii/application/pipeline.py`). Each stage records started,
+finished, capability status, and notes in a per job timeline.
 
-## Downstream integration contract
+1. Ingesting. Validate the local file or uploaded bytes. Compute
+   SHA 256. Probe duration, resolution, fps, and codec with ffprobe
+   when available. Fail closed on unreadable duration.
+2. Understanding video. Upload the file once, then run the hosted
+   video understanding call. Returns a prose summary plus atomic
+   factual claims. SHA keyed cache avoids rebilling repeats.
+3. Perceiving objects. Optional SAM pass over sampled frames. Counts
+   are observation counts, never HTTP codes. A timeout degrades to
+   partial, never a crash.
+4. Transcribing. Extract audio to normalized WAV (mono, 16 bit PCM,
+   24 kHz) and call the Meta ASR endpoint. No audio stream means
+   `unavailable`, never an empty success.
+5. Searching. For each claim, run evidence search with a relevance
+   gate and stance classification (support, refute, neutral).
+   Fact check debunks override to contradicted.
+6. Assessing. Combine stance counts, source credibility, AI origin
+   probability, and spam probability into one of four verdicts:
+   supported, contradicted, mixed evidence, insufficient evidence.
+7. Reporting. Render JSON plus Markdown narratives (claim text,
+   evidence found, reality check, key sources, why this verdict)
+   and persist the full record.
 
-Downstream applications and a future CLI consume the library only
-through the public API exported from `vii` (`vii.__all__`): the `VII`
-client (`vii.client`), typed input/output models (`AnalysisCreate`,
-`VideoSourceIn`, `MediaIngestionResult`, `OriginalityResult`,
-`ReportPayload`), `Settings`, and the typed errors in `vii.errors`.
-Local client operations (`inspect_media`, `sha256`,
-`assess_originality`, `validate_dataset`, `capabilities`) need no
-server, database, worker, network, or provider credentials. The only
-provider-backed operation, `VII.analyze`, is explicit, runs only when
-called, reuses the application pipeline below, and raises
-`ProviderConfigurationError` before creating any job when no key is
-configured. Internal packages (`vii.api`, `vii.application`,
-`vii.persistence`, `vii.meta`, ...) are implementation details;
-consumers must not import them.
+Fast path: the library, CLI, and API quick screen run only
+ingesting plus a local heuristic screen (no provider calls) and
+return in seconds. The deep pipeline is opt in per call.
 
-## Layers and dependency direction
+## Component map
 
-Dependencies point **inward and downward**; lower layers never import the API
-or UI.
+1. `src/vii/application/services.py`: AnalysisService facade,
+   the one entry point for analysis orchestration.
+2. `src/vii/application/pipeline.py`: stage runner with per stage
+   timeouts and the capability ledger.
+3. `src/vii/application/worker.py`: background worker plus crash
+   recovery for queued and running jobs.
+4. `src/vii/meta/`: the only vendor boundary. `client.py`
+   uploads, responses, and search. `transcription.py` ASR.
+5. `src/vii/verification/`: stance classifier, assessment,
+   evidence repository helpers.
+6. `src/vii/integrity/`: AI origin scoring (`ai_detection.py`)
+   plus spam screening (`spam.py`).
+7. `src/vii/media/`: ffprobe wrapper, audio extraction,
+   URL fetch guard, validators.
+8. `src/vii/persistence/`: SQLAlchemy models, repositories (the
+   only DB access), Alembic migrations.
+9. `src/vii/api/`: FastAPI app plus the `/v1` router.
+10. `src/vii/tui.py`, `src/vii/cli.py`, `src/vii/checker.py`:
+    terminal surfaces plus the VideoChecker wrapper.
+11. `src/vii/client.py`: the `VII` and `VIIAsync` library clients
+    plus the `from vii import VII` entry point.
+12. `src/vii/mcp_server.py`: stdio MCP server exposing four tools.
+13. `src/vii/config.py`, `src/vii/credentials.py`,
+    `src/vii/logging_setup.py`: settings, keystore, redaction.
 
-| Layer | Package | Responsibility | May import |
-|---|---|---|---|
-| Transport | `vii.api` | HTTP routing, auth dependency, status codes | application, config, domain, errors |
-| Application | `vii.application` | Use cases: pipeline orchestration, service facade, worker lifecycle | domain, persistence, media, meta, evidence, verification, integrity, reports, dataset |
-| Domain | `vii.domain` | Pydantic contracts + enums. No Qt, SQL, or HTTP imports. | stdlib, pydantic only |
-| Persistence | `vii.persistence` | ORM models, engine/session, repositories (all DB access) | domain (enums only) |
-| Providers | `vii.meta`, `vii.providers` | Model-API transport, payloads, response parsing; legacy Provider protocol + mocks | domain, config, errors |
-| Evidence | `vii.evidence` | Retrieval orchestration, source ranking, citation validation | domain, meta |
-| Verification | `vii.verification` | Claim classification + evidence-grounded assessment rules | domain, evidence |
-| Media | `vii.media` | Ingestion validation, SSRF guard, ffmpeg/ffprobe, hashing | domain |
-| Integrity | `vii.integrity` | Media-origin notes, originality (SHA-256 + pHash) | domain, media |
-| Reports | `vii.reports` | JSON/Markdown payload building and export | stdlib only |
-| Dataset | `vii.dataset` | CSV schema validation, row errors, idempotent inbox ingestion | persistence (lazy) |
-| Platform | `vii.platforms`, `vii.media.social` | Authorized Instagram/Facebook API retrieval, URL classification | media |
-| Storage | `vii.storage` | Local filesystem layout; optional S3-compatible backend | stdlib (+ lazy boto3) |
-| UI | `vii.ui` | PySide6 desktop views (optional extra) | application, config |
+## Data flow (deep check)
 
-**Rules**
+Local file or URL bytes enter ingestion. The SHA 256 of the bytes
+keys the understanding cache. The anonymized file id fans out to
+video understanding, SAM perception, and ASR transcription. Claims
+fan out to one evidence search each. Stances plus credibility feed
+assessment. Verdicts plus narratives feed the persisted report.
+Failure in one optional capability marks that capability and keeps
+every successful sibling result. Nothing synthesizes missing data.
 
-- All database access goes through `vii.persistence.repositories`. API handlers
-  never write ORM queries directly (dataset CSV endpoints delegate to
-  `vii.dataset.ingestion`).
-- External providers are replaceable: pipeline code depends on
-  `MetaClient`-shaped interfaces and Pydantic domain types, never on raw vendor
-  JSON outside `vii.meta.response_parser`.
-- Optional subsystems stay optional: no PySide6, keyring, or boto3 is required
-  to start the API; a live API key is required only for provider-backed
-  analysis (local operations — dataset CSV, hashing, ffprobe, persistence,
-  report export — run without one).
+## Failure semantics
 
-## Data flow (one analysis)
+1. Required stage fails (ingest, understand): job is `failed`
+   with a typed error. No partial report is presented as complete.
+2. Optional capability fails (SAM, ASR, one search): capability is
+   `failed` or `unavailable`, job continues, report lists the gap.
+3. Provider auth fails (401, 403): fail fast, no retry, typed
+   `ProviderAuthenticationError`.
+4. Provider rate limit (429): bounded backoff, then typed error.
+5. Unknown provider payload: typed parse error with redacted body
+   excerpt, never a guessed field.
 
-1. `POST /v1/analyses` → `AnalysisService.create` → `Pipeline.create_job`
-   persists an `analysis_jobs` row (`queued`, consumer-scoped) → `Worker.enqueue`.
-2. Worker executes `Pipeline.run` through stages, persisting status to
-   `analysis_jobs.status` and audit lines to `processing_logs` at each step:
-   ingestion (SSRF-guarded URL validation or local-file checks, optional MP4
-   conversion) → native video understanding (URL `input_video` or Files-API
-   `file_id`) → transcription → claim extraction (factual vs opinion/satire/
-   prediction) → per-claim web search + citation capture → rule-based
-   assessment → origin/originality → report export (DB `reports` rows + files
-   under `storage_dir/exports/`).
-3. Clients poll `GET /v1/jobs/{id}`; reports via `GET /v1/analyses/{id}/report(.md)`.
-4. Online-first: without a key the job fails with `ProviderConfigurationError`
-   (status `failed`, reason persisted). Synthetic demo fixtures run only on
-   explicit opt-in (`VII_DEMO_MODE=true` / `demo=true`) and are labeled
-   SYNTHETIC DEMO — never presented as live evidence.
+## Caching and cost control
 
-Job states: `queued → ingesting → understanding_video → transcribing →
-extracting_claims → searching → assessing → reporting → succeeded`, with
-`failed` / `cancelled` terminals. Claim IDs are job-scoped
-(`<job_id>_c001`), assessments require evidence for supported/contradicted.
+1. Understanding results cache by file SHA 256 in SQLite, so
+   rechecking the same bytes never rebills.
+2. One upload per file per job. Retries never reupload; they reuse
+   the returned file id.
+3. Retries never fire on 400, 401, 403, 404, or 413. Transcription
+   short circuits on 401 and 403.
+4. Demo mode is explicit opt in only and every demo surface is
+   labeled SYNTHETIC DEMO.
+5. Live provider smoke usage stays inside authorized runs. Routine
+   tests use mocked transports exclusively.
 
-## Ingestion-only operation (no job, no provider)
+## Security boundaries
 
-`python3 -m vii.main --ingest-only PATH` (service:
-`vii.media.ingestion.inspect_local_media`) validates one local file —
-existence, readability, size limit, container **signature** vs extension
-(magic bytes, `vii.media.ingestion.sniff_container`), SHA-256, and duration
-from the pure-Python MP4 parser (`vii.media.mp4_probe`, `mvhd`) with
-optional ffprobe enrichment when a binary is supplied and installed. It
-opens no database, creates no job, enqueues no worker, and imports no
-provider module; unsupported/oversized/mismatched media raise typed
-`ValueError` subclasses from `vii.errors`. A duration that cannot be
-determined locally is reported as unknown — never guessed.
+Vendor credentials live in exactly one layer (`meta/` plus
+`credentials.py`). API consumer identity lives in the API layer.
+Log redaction applies at the handler level so no emitter can leak
+a secret. Path scoping confines every local read. See
+`docs/SECURITY.md` for the full model.
 
-## Provider contracts — verification status
+## What is intentionally absent
 
-| Capability | Implemented in repo | Contract status |
-|---|---|---|
-| Muse video understanding (`vii.meta`) | `input_video`/`video_url` + Files-API `file_id` payloads, typed errors, provider-reported `usage` preserved (`provider_usage`) | **Configured-unverified.** The configured identifier is `muse-spark-1.3` (`META_MODEL`); the name “Muse Wonder”, live acceptance of these payloads, format/size/duration limits, Files-API lifecycle, and pricing are **not verified** against official documentation in this environment. No live call has been made. |
-| Transcription (`muse-voice-transcribe-1.0`) | FFmpeg extraction + adapter, gated by `VII_ENABLE_TRANSCRIPTION` | Configured-unverified; runs only when enabled **and** a local file exists, so audio extraction is never an unconditional prerequisite. |
-| Evidence search | Meta `web_search` retrieval with persisted citations, separate from visual interpretation | Configured-unverified live; without a live provider, `performed=false` and no sources are fabricated. |
-| Visual perception (`local` / SAM 3.1) | `VisualObservation`, `VisualPerceptionProvider` protocol, `StageName.VISUAL_PERCEPTION`, optional pipeline stage; `LocalVisualPerceptionProvider` for `VII_VISUAL_PERCEPTION_PROVIDER=local`, `SamVisualPerceptionProvider` for `sam` | **Local implemented; SAM 3.1 adapter implemented, live verified 2026-11-03.** Local: FFmpeg-sampled frames + Pillow analysis (shot segments, inter-frame change), status `available_local`, `supports_tracking=false`, no masks/prompts. SAM 3.1: docs-verified contract (model `sam-3.1`, `POST /v1/responses`, same Bearer key, concept prompts from video-understanding entities, Files-API upload for local files, documented box/mask wire grammar with stable tracking ids; mask payloads stored as encoded artifacts), status `configured_unverified` with a key, `blocked` without one, never called in demo mode. Video is billed per frame (50-frame minimum). Sparse local frames are never described as continuous tracking. Live evidence (2026-11-03): direct call (concept "flower", public MDN flower MP4 via `video_url`) returned 125 segmentation observations (response model `sam-3.1`; frame 25, track id 0, box x1=397,y1=194,x2=561,y2=347, confidence 0.706, one_bit masks under `data/visual_masks/`); full pipeline run on the same URL succeeded (job `job_9413c0ee47ff`) with 363 segmentation observations in `metadata.visual_perception` and exactly five report dimensions. The originally planned `gtv-videos-bucket` sample now returns GCS `AccessDenied` (403) to anonymous fetchers (including the provider's downloader), so the MDN sample was substituted. |
-| FFmpeg/ffprobe | Probe/convert/extract/sample utilities (subprocess, no shell) | Optional: required only for non-MP4 conversion, enabled transcription, and frame sampling. Native MP4 ingestion validates without it. |
-
-Provider selection is explicit (`vii.providers.capabilities.provider_capabilities`,
-surfaced via diagnostics): states are `configured_unverified`, `blocked`,
-`disabled`, `unavailable_no_provider`, or `available_local` (working local
-visual provider) — never an implied success.
-Whole-job worker retries are limited to typed-retryable or unknown
-transient failures; configuration/permission/validation failures are
-terminal because re-running cannot fix them and would re-spend provider
-calls. Costs are reported only from provider-returned usage; while pricing
-is unverified, `estimated_cost_usd` stays unknown rather than invented.
-
-## Background processing
-
-`vii.application.worker.Worker` is a bounded `ThreadPoolExecutor` whose queue
-of record is the database itself (status column + `processing_logs`). It
-provides: idempotent enqueue (running/terminal jobs are not re-executed),
-bounded retries with persisted failure logs, cooperative cancellation, and
-restart recovery (`recover()` force re-enqueues stale `queued`/running jobs).
-This is sufficient for a single-process deployment; a persistent external queue
-(Redis/Celery) is only justified by multi-process scale-out — see
-`docs/TECH_STACK.md`.
-
-## Dataset flow
-
-`data/dataset.csv` (or `DATASET_CSV_PATH`) → `vii.dataset.ingestion.validate_csv`
-(schema + row errors, no side effects) → explicit ingest (`--apply` or
-`POST /v1/datasets/ingest-csv?dry_run=false`) → `DatasetRepo` inbox rows
-(`annotation_status='pending'`). Ingestion never creates analyses, downloads
-media, or calls a model. See `docs/DATASET.md`.
-
-## Architectural decisions
-
-- **AD-1 Modular monolith over microservices.** One process keeps transactions,
-  job state, and reports consistent with the least operational cost.
-- **AD-2 Database-as-queue over Celery/Redis.** Job volume is interactive and
-  single-process today; the DB status machine gives durability and recovery
-  without new infrastructure. Revisit if workers must span hosts.
-- **AD-3 Five separate assessment dimensions, never one real/fake score.**
-  Claim verification, evidence, media origin, originality, and limitations are
-  reported independently (`vii.reports.exporter.DIMENSIONS`).
-- **AD-4 Provider adapter over vendor coupling.** `vii.meta` owns all Meta
-  request construction/parsing/retries; `vii.providers` preserves the legacy
-  Protocol + an explicitly-opted-in synthetic mock for tests.
-- **AD-5 Online-first honesty.** Missing keys, provider failures, missing
-  datasets, and missing media binaries produce explicit typed errors or
-  labeled unavailable states, never fabricated results.
+1. No background scheduler. The API worker and the TUI run inline.
+2. No multi tenant billing. Consumer scoping isolates data only.
+3. No streaming analysis progress over HTTP. Poll the job endpoint.
+4. No plugin framework. New capabilities are pipeline stages.

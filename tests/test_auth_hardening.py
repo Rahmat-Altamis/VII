@@ -14,7 +14,7 @@ from vii.config import Settings, _is_loopback_host
 def _s(**kw):
     kw.setdefault("VII_API_HOST", "127.0.0.1")
     kw.setdefault("VII_STORAGE_DIR", "/tmp/vii_auth_tests")
-    return Settings(**kw)
+    return Settings(_env_file=None, **kw)
 
 
 # -- loopback classification --------------------------------------------------
@@ -114,8 +114,9 @@ def test_unauthenticated_dev_uses_configured_consumer():
 
 # -- HTTP-level: X-Consumer spoof resistance + missing/invalid creds ------------
 def _client_with(settings):
-    import vii.api.v1 as v1
     from fastapi.testclient import TestClient
+
+    import vii.api.v1 as v1
     from vii.api.app import app
     from vii.application.services import AnalysisService
     from vii.config import get_settings

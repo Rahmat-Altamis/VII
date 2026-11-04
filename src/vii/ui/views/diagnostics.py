@@ -9,8 +9,11 @@ class DiagnosticsView(QWidget):
         super().__init__(parent)
         self._service = service
         lay = QVBoxLayout(self)
-        t = QLabel("Diagnostics"); t.setObjectName("h1"); lay.addWidget(t)
-        self.text = QTextEdit(); self.text.setReadOnly(True)
+        t = QLabel("Diagnostics")
+        t.setObjectName("h1")
+        lay.addWidget(t)
+        self.text = QTextEdit()
+        self.text.setReadOnly(True)
         lay.addWidget(self.text)
 
     def refresh(self):

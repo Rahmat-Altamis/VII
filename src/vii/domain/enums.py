@@ -1,12 +1,7 @@
-"""Shared enums — five assessment dimensions stay separate (no single real/fake score)."""
+"""Shared enums, five assessment dimensions stay separate (no single real/fake score)."""
 from __future__ import annotations
 
-from enum import Enum
-
-
-class StrEnum(str, Enum):
-    def __str__(self) -> str:  # keep JSON-friendly
-        return self.value
+from enum import StrEnum
 
 
 class JobStatus(StrEnum):

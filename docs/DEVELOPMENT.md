@@ -3,84 +3,102 @@
 ## Setup
 
 ```bash
-cd video-integrity-intelligence
-python3.12 -m venv .venv && source .venv/bin/activate
-pip install -e .                 # core library only (import vii, local ops)
-pip install -e ".[dev]"          # full app + API + tests + Ruff; add ,desktop for PySide6 UI
-cp .env.example .env             # set MODEL_API_KEY for real (online-first) analysis
-which ffmpeg ffprobe             # media tools (required for local-file probing)
+cd video_integrity_intelligence
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+cp .env.example .env
+which ffmpeg ffprobe
 ```
 
+Notes on the commands above. The dev extra includes the full app plus
+tests plus Ruff. Add the desktop extra for the PySide6 UI. Set
+MODEL_API_KEY in `.env` for real online first analysis. The ffmpeg and
+ffprobe binaries are required for local file probing.
+
 Library consumers need only the core install plus the extras for the
-features they use (`.[api]`, `.[db]`, `.[provider]`, `.[media]`, or
-`.[app]` for all of them; see `pyproject.toml`). Basic library usage
-(`from vii import VII`; `inspect_media`, `sha256`,
+features they use (`.[api]`, `.[db]`, `.[provider]`, `.[media]`,
+`.[mcp]`, or `.[app]` for all of them; see `pyproject.toml`). Basic
+library usage (`from vii import VII`, plus `inspect_media`, `sha256`,
 `assess_originality`, `validate_dataset`) requires no deployed server,
 database, or background worker.
 
 ## Run
 
 ```bash
-./scripts/run_api.sh             # FastAPI on http://127.0.0.1:8765 (docs: /docs)
-./scripts/run_demo.sh            # headless offline end-to-end (synthetic fixture)
-./scripts/run_ui.sh              # PySide6 desktop (needs .[desktop])
-python3 -m vii.main --validate-dataset   # dataset CSV check (see docs/DATASET.md)
+.venv/bin/vii tui
+.venv/bin/vii check <video> --quick
+./scripts/run_api.sh
+./scripts/run_demo.sh
+python3 -m vii.main --validate-dataset
 ```
 
-Without `MODEL_API_KEY`, provider-backed analysis fails explicitly with
-`ProviderConfigurationError` (job marked `failed`) — fixtures are never
-substituted. A synthetic demo runs only on explicit opt-in
-(`VII_DEMO_MODE=true`, `--demo`, or `demo=true`) and is labeled SYNTHETIC DEMO.
-Live mode needs `MODEL_API_KEY` (+ optional `META_BASE_URL`, `META_MODEL`).
+The TUI is the interactive agent console. The quick flag prints a fast
+local screen. The API script serves FastAPI on 127.0.0.1:8765 with
+interactive docs at /docs. The demo script runs a headless synthetic
+run. The validate command checks the dataset CSV (see docs/DATASET.md).
 
-## Test & lint
+Without `MODEL_API_KEY`, provider backed analysis fails explicitly
+with `ProviderConfigurationError` (job marked `failed`). Fixtures are
+never substituted. A synthetic demo runs only on explicit opt in
+(`VII_DEMO_MODE=true`, the demo flag, or `demo=true`) and is labeled
+SYNTHETIC DEMO. Live mode needs `MODEL_API_KEY` plus optional
+`META_BASE_URL` and `META_MODEL`.
+
+## Test and lint
 
 ```bash
-python3 -m pytest tests/ -q      # unit + integration + API tests (mocks only)
-ruff check src tests             # lint (config in pyproject.toml [tool.ruff])
+.venv/bin/python -m pytest tests/ -q
+.venv/bin/ruff check src tests
 ```
 
-Live Meta checks (video URL, file upload, web search, transcription) are
-**opt-in and never run by default** — they need a real key and spend credits.
-Routine CI uses mocked provider responses only.
+The suite (255 tests) uses mocked providers only, so routine runs
+spend no credits. Live provider checks are opt in and never run by
+default. They need a real key and spend credits.
 
-## Database & migrations
+## Database and migrations
 
 ```bash
-# Zero-config dev: vii.persistence.db.init_db creates tables automatically.
-# Reproducible schema (preferred for shared/production DBs):
 VII_DATABASE_URL=sqlite:///./data/vii.db alembic upgrade head
-alembic downgrade -1             # roll back one revision
+alembic downgrade -1
 ```
 
-Revision `0001_initial` creates the 12 tables in `vii.persistence.models`.
-`alembic/env.py` resolves the URL as: `-x url=` → `VII_DATABASE_URL` →
-`sqlite:///./data/vii.db`. PostgreSQL is model-compatible only: no PostgreSQL
-driver is declared in `pyproject.toml`, so PostgreSQL URLs do not run on a
-standard install (see `docs/TECH_STACK.md` §5/§7).
+Zero config dev happens through `vii.persistence.db.init_db`, which
+creates tables automatically and then applies idempotent startup
+migrations. Alembic revisions are the reproducible path for shared or
+production databases. Revision `0002_evidence_relationship` adds the
+evidence relationship columns. `alembic/env.py` resolves the URL from
+the `-x url` option, then `VII_DATABASE_URL`, then the default SQLite
+path. PostgreSQL is model compatible only: no PostgreSQL driver ships
+in `pyproject.toml`, so PostgreSQL URLs do not run on a standard
+install (see `docs/TECH_STACK.md`).
 
 ## Layout (where to put new code)
 
-- HTTP concerns → `src/vii/api/` (v1 router is the contract).
-- Use cases/orchestration → `src/vii/application/` (`services.py` facade,
-  `pipeline.py` stages, `worker.py` lifecycle).
-- Pure contracts → `src/vii/domain/` (no Qt/SQL/HTTP imports allowed).
-- DB access → `src/vii/persistence/repositories.py` only.
-- Vendor I/O → `src/vii/meta/` (adapter) — never in handlers or pipeline.
-- CSV data → `src/vii/dataset/`; reports → `src/vii/reports/`.
+1. HTTP concerns go in `src/vii/api/` (the v1 router is the contract).
+2. Use cases and orchestration go in `src/vii/application/`
+   (`services.py` facade, `pipeline.py` stages, `worker.py` lifecycle).
+3. Pure contracts go in `src/vii/domain/` (no Qt, SQL, or HTTP imports).
+4. All DB access goes in `src/vii/persistence/repositories.py` only.
+5. Vendor I/O goes in `src/vii/meta/` (the adapter), never in handlers
+   or pipeline code.
+6. CSV data goes in `src/vii/dataset/`; reports go in `src/vii/reports/`.
+7. Terminal surfaces live in `src/vii/tui.py`, `src/vii/cli.py`, and
+   `src/vii/checker.py`. Agent tools live in `src/vii/mcp_server.py`.
 
 ## Configuration
 
-All settings are env-driven via `vii.config.Settings` (aliases in
-`.env.example`). Validated at startup: `VII_REQUIRE_AUTH=true` without keys,
-or a non-loopback bind without auth, **fails fast** instead of running
-exposed. Secrets are redacted in logs (`vii.logging_setup`) and diagnostics
-(`Settings.redacted()`).
+All settings are env driven through `vii.config.Settings` (aliases in
+`.env.example`). Validated at startup: `VII_REQUIRE_AUTH=true` without
+keys, or a loopback bypass bind without auth, fails fast instead of
+running exposed. Secrets are redacted in logs (`vii.logging_setup`)
+and diagnostics (`Settings.redacted()`).
 
 ## Troubleshooting
 
-- `ffprobe not found` → install FFmpeg; URL/offline flows still work.
-- Tests touching settings: clear the cache (`get_settings.cache_clear()`)
-  after changing env vars in a test process — see `tests/test_auth_hardening.py`.
-- Stale jobs after a crash: restart the API; the worker recovers
-  `queued`/running jobs automatically (`Worker.recover`).
+1. `ffprobe not found`: install FFmpeg. URL flows still work.
+2. Tests touching settings: clear the cache
+   (`get_settings.cache_clear()`) after changing env vars in a test
+   process. See `tests/test_auth_hardening.py`.
+3. Stale jobs after a crash: restart the API. The worker recovers
+   queued and running jobs automatically (`Worker.recover`).

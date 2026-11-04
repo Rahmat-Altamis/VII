@@ -22,4 +22,10 @@ def init_db(db_url: str, storage_dir: str | Path = "./data"):
     Path(storage_dir).mkdir(parents=True, exist_ok=True)
     engine = make_engine(db_url)
     Base.metadata.create_all(engine)
+    if db_url.startswith("sqlite"):
+        # create_all does not alter existing tables; migrate() upgrades
+        # old databases to the current schema idempotently.
+        from vii.persistence.migrations import migrate
+
+        migrate(engine)
     return sessionmaker(bind=engine, expire_on_commit=False)

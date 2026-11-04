@@ -1,7 +1,7 @@
 """Versioned v1 REST API: analyses, jobs, investigate, compare, datasets.
 
 Auth: Bearer service key when VII_REQUIRE_AUTH=true, else consumer header
-passthrough. All job/dataset access is scoped to the calling consumer —
+passthrough. All job/dataset access is scoped to the calling consumer,
 cross-consumer reads return 404, never another consumer's data. Streaming
 webhook delivery: POST /v1/analyses accepts an optional webhook_url and
 fires a signed JSON POST when the job reaches a terminal state. Delivery
@@ -15,7 +15,9 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import shutil
+import threading
 import uuid
 from pathlib import Path
 
@@ -37,12 +39,33 @@ router = APIRouter(prefix="/v1")
 
 _service: AnalysisService | None = None
 _worker = None
+_singleton_lock = threading.Lock()
+
+_JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _safe_job_path(storage_dir, job_id: str, ext: str):
+    """Report path for a job, scoped under the exports directory."""
+    if not _JOB_ID_RE.match(job_id or ""):
+        return None
+    base = (Path(storage_dir) / "exports").resolve()
+    path = (base / f"{job_id}.{ext}").resolve()
+    return path if path.is_relative_to(base) else None
+
+
+def sanitize_consumer(name: str) -> str:
+    """Filesystem-safe consumer id (DB identity is unchanged)."""
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", (name or "").strip())
+    cleaned = cleaned.replace("..", "_").strip(".")
+    return cleaned[:128] or "default"
 
 
 def svc() -> AnalysisService:
     global _service
     if _service is None:
-        _service = AnalysisService(get_settings())
+        with _singleton_lock:
+            if _service is None:
+                _service = AnalysisService(get_settings())
     return _service
 
 
@@ -50,7 +73,7 @@ def _terminal_webhook(job_id: str, status: str) -> None:
     """Worker terminal callback: deliver the stashed webhook for async
     jobs (the sync /run path fires _fire_webhook directly). The consumer
     comes from the job row; delivery itself no-ops when webhooks are
-    disabled or no target was stashed — never raises into the worker."""
+    disabled or no target was stashed, never raises into the worker."""
     consumer = "default"
     try:
         from vii.persistence.repositories import JobRepo
@@ -66,10 +89,12 @@ def _terminal_webhook(job_id: str, status: str) -> None:
 def worker():
     global _worker
     if _worker is None:
-        from vii.application.worker import Worker
-        s = get_settings()
-        _worker = Worker(svc(), s.worker_concurrency,
-                         on_terminal=_terminal_webhook)
+        with _singleton_lock:
+            if _worker is None:
+                from vii.application.worker import Worker
+                s = get_settings()
+                _worker = Worker(svc(), s.worker_concurrency,
+                                 on_terminal=_terminal_webhook)
     return _worker
 
 
@@ -85,7 +110,7 @@ def consumer_id(authorization: str | None = Header(default=None),
             raise HTTPException(403, "invalid service key")
         return cid
     if x_consumer:
-        return x_consumer.strip()[:128]
+        return sanitize_consumer(x_consumer)
     return s.consumer_id or "default"
 
 
@@ -174,9 +199,9 @@ def get_report_json(job_id: str, auth: str = Depends(consumer_id)):
     if not d:
         raise HTTPException(404, "unknown job")
     s = get_settings()
-    path = Path(s.storage_dir) / "exports" / f"{job_id}.json"
-    if not path.exists():
-        raise HTTPException(404, "report not generated yet — poll the job until succeeded")
+    path = _safe_job_path(s.storage_dir, job_id, "json")
+    if path is None or not path.exists():
+        raise HTTPException(404, "report not generated yet, poll the job until succeeded")
     return JSONResponse(json.loads(path.read_text()))
 
 
@@ -185,9 +210,9 @@ def get_report_md(job_id: str, auth: str = Depends(consumer_id)):
     if not svc().get(job_id, auth):
         raise HTTPException(404, "unknown job")
     s = get_settings()
-    path = Path(s.storage_dir) / "exports" / f"{job_id}.md"
-    if not path.exists():
-        raise HTTPException(404, "report not generated yet — poll the job until succeeded")
+    path = _safe_job_path(s.storage_dir, job_id, "md")
+    if path is None or not path.exists():
+        raise HTTPException(404, "report not generated yet, poll the job until succeeded")
     return path.read_text()
 
 
@@ -203,7 +228,7 @@ def upload_video(file: UploadFile = File(...), auth: str = Depends(consumer_id))
     suffix = Path(file.filename or "upload").suffix.lower() or ".mp4"
     if suffix not in (".mp4", ".mkv", ".mov", ".webm", ".avi", ".m4v"):
         raise HTTPException(400, f"unsupported format {suffix}")
-    name = f"{auth}_{uuid.uuid4().hex[:12]}{suffix}"
+    name = f"{sanitize_consumer(auth)}_{uuid.uuid4().hex[:12]}{suffix}"
     dest = Path(s.storage_dir) / "originals" / name
     dest.parent.mkdir(parents=True, exist_ok=True)
     limit = s.max_upload_mb * 1024 * 1024
@@ -219,6 +244,16 @@ def upload_video(file: UploadFile = File(...), auth: str = Depends(consumer_id))
                 out.write(chunk)
     except HTTPException:
         raise
+    # Content check: the extension claim must match the actual container
+    # signature; a renamed non-video file is deleted and rejected.
+    from vii.media.ingestion import _CONTAINER_FAMILY, _EXT_CONTAINER, sniff_container
+    container = sniff_container(dest)
+    expected = _EXT_CONTAINER.get(suffix, "unknown")
+    if written == 0 or container == "unknown" or (
+            _CONTAINER_FAMILY.get(container) != _CONTAINER_FAMILY.get(expected)):
+        dest.unlink(missing_ok=True)
+        raise HTTPException(
+            400, f"upload content does not match {suffix} container signature")
     size_mb = written / (1024 * 1024)
     from vii.media.hashing import sha256_file
     digest = sha256_file(dest)
@@ -251,7 +286,7 @@ def compare(req: CompareRequest, auth: str = Depends(consumer_id)):
 
     Precedence: explicit SHA pair > report-backed job pair. For job pairs the
     endpoint reads persisted reports (consumer-scoped) and compares their
-    originality dimensions — never the other consumer's raw media.
+    originality dimensions, never the other consumer's raw media.
     """
     from vii.media.hashing import phash_distance
     from vii.persistence.repositories import AnalysisRepo
@@ -275,7 +310,7 @@ def compare(req: CompareRequest, auth: str = Depends(consumer_id)):
             r_rep = repo.report_payload(req.reference_job_id) or {}
             c_rep = repo.report_payload(req.candidate_job_id) or {}
         if not r_rep or not c_rep:
-            raise HTTPException(409, "one or both jobs have no persisted JSON report yet — "
+            raise HTTPException(409, "one or both jobs have no persisted JSON report yet, "
                                      "run them to completion first")
         r_o = (r_rep.get("dimensions") or {}).get("originality") or {}
         c_o = (c_rep.get("dimensions") or {}).get("originality") or {}
@@ -338,7 +373,7 @@ def register_sample(req: DatasetRegisterRequest, auth: str = Depends(consumer_id
             dur = float(meta.get("duration_s", 0) or 0)
         except Exception:
             meta = {"probe": "unavailable"}
-        dest = Path(svc().settings.storage_dir) / "datasets" / auth / p.name
+        dest = Path(svc().settings.storage_dir) / "datasets" / sanitize_consumer(auth) / p.name
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(p, dest)
         storage_ref = str(dest)
@@ -368,7 +403,7 @@ def check_dataset_csv(auth: str = Depends(consumer_id)):
     """Validate the configured dataset CSV (read-only, no DB writes, no analysis).
 
     Uses Settings.dataset_csv_path (DATASET_CSV_PATH, default
-    data/dataset.csv). A missing file is a normal 200 with exists=false —
+    data/dataset.csv). A missing file is a normal 200 with exists=false,
     the app runs without a dataset until one is supplied.
     """
     from vii.dataset.ingestion import validate_csv
@@ -437,11 +472,12 @@ def _webhook_target_ok(url: str) -> tuple[bool, str]:
     if host.endswith((".internal", ".local", ".lan", ".corp")):
         return False, "internal hostnames refused"
     try:
-        for _fam, _, _, _, sockaddr in socket.getaddrinfo(host, None):
+        infos = socket.getaddrinfo(host, None)
+        if not infos:
+            return False, "hostname does not resolve"
+        for _fam, _, _, _, sockaddr in infos:
             ip = ipaddress.ip_address(sockaddr[0])
-            if (ip.is_private or ip.is_loopback or ip.is_link_local
-                    or ip.is_multicast or ip.is_reserved
-                    or str(ip) in _METADATA_IPS):
+            if not ip.is_global or str(ip) in _METADATA_IPS:
                 return False, f"non-public destination ({ip})"
     except socket.gaierror:
         return False, "hostname does not resolve"
@@ -484,7 +520,8 @@ def _fire_webhook(job_id: str, status: str, consumer: str) -> None:
         expected_host = _webhook_host_of(target)
         body = json.dumps({"job_id": job_id, "status": status,
                            "consumer": consumer}).encode()
-        sig = hmac.new(b"vii-webhook", body, hashlib.sha256).hexdigest()
+        secret = (s.webhook_secret or "vii-webhook").encode()
+        sig = hmac.new(secret, body, hashlib.sha256).hexdigest()
 
         class _Guard(urllib.request.HTTPRedirectHandler):
             def redirect_request(self, req, fp, code, msg, headers, newurl):

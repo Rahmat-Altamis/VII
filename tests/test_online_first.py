@@ -9,7 +9,7 @@ from vii.errors import ProviderConfigurationError, ProviderError
 
 
 def _live_settings(tmp_path):
-    return Settings(MODEL_API_KEY="test-key-not-real",
+    return Settings(_env_file=None, MODEL_API_KEY="test-key-not-real",
                     VII_DATABASE_URL=f"sqlite:///{tmp_path}/vii.db",
                     VII_STORAGE_DIR=tmp_path)
 
@@ -20,7 +20,7 @@ def _url_req(**kw):
 
 
 def test_default_config_selects_online_provider(tmp_path):
-    s = Settings(VII_DATABASE_URL=f"sqlite:///{tmp_path}/vii.db",
+    s = Settings(_env_file=None, VII_DATABASE_URL=f"sqlite:///{tmp_path}/vii.db",
                  VII_STORAGE_DIR=tmp_path)
     assert s.demo_enabled is False
     assert _url_req().demo_requested is False
@@ -28,7 +28,7 @@ def test_default_config_selects_online_provider(tmp_path):
 
 def test_missing_credentials_fail_clearly_on_create(tmp_path):
     from vii.application.services import AnalysisService
-    svc = AnalysisService(Settings(
+    svc = AnalysisService(Settings(_env_file=None,
         VII_DATABASE_URL=f"sqlite:///{tmp_path}/vii.db", VII_STORAGE_DIR=tmp_path))
     with pytest.raises(ProviderConfigurationError, match="MODEL_API_KEY"):
         svc.create(_url_req())

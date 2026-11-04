@@ -1,6 +1,6 @@
 """Provider seams: usage accounting, error classification, visual perception.
 
-All provider behaviour here is local/mocked — no live calls, no credits.
+All provider behaviour here is local/mocked, no live calls, no credits.
 SAM 3.1 and Muse live contracts remain unverified; these tests assert the
 honest blocked/unknown states, not fabricated success.
 """

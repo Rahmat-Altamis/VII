@@ -55,7 +55,7 @@ DEMO_UNDERSTANDING = {
                 "was performed."),
     "events": ["Presenter introduces the pipeline", "Sample chart shown on screen"],
     "visual_observations": ["Single speaker, medium shot", "Neutral studio background"],
-    "on_screen_text": ["Video Integrity Intelligence — synthetic demo"],
+    "on_screen_text": ["Video Integrity Intelligence, synthetic demo"],
     "entities": {"people": ["demo presenter"], "organizations": [], "objects": ["chart"], "locations": []},
     "factual_claims": [
         {"text": "The Eiffel Tower is 330 metres tall.", "start_s": 2.0, "end_s": 5.0},
@@ -135,6 +135,10 @@ class Pipeline:
             job = jobs.get(job_id)
             if job is None:
                 raise ValueError(f"unknown job {job_id}")
+            # Terminal-state guard: a cancelled job is never re-run or
+            # overwritten; a succeeded job returns its persisted report.
+            if str(job.status) == str(JobStatus.CANCELLED):
+                raise RuntimeError("job cancelled")
             # Idempotency: re-running a succeeded job must not duplicate
             # claims/evidence/assessments. Return the persisted report payload.
             if str(job.status) == str(JobStatus.SUCCEEDED):
@@ -170,6 +174,10 @@ class Pipeline:
             visual_observations, visual_state = self._perceive(
                 job_id, media_path, sha, demo, jobs, vu)
 
+            # ---- B3. optional AI-generation detection (if enabled) ----
+            ai_detection = self._detect_ai(
+                job_id, media_path, demo, jobs)
+
             # ---- C. transcription ----
             jobs.set_status(job, JobStatus.TRANSCRIBING)
             cb(job_id, JobStatus.TRANSCRIBING, "Transcribing audio…")
@@ -193,22 +201,47 @@ class Pipeline:
             # ---- E+F+G. search + validate + assess ----
             jobs.set_status(job, JobStatus.SEARCHING)
             assessments = []
+            capabilities: dict[str, str] = {}
+            search_failures = 0
             for c in all_claims:
                 cid = c.__dict__["_id"]
                 cb(job_id, JobStatus.SEARCHING, f"Searching evidence for {cid}…")
                 if c.kind != ClaimKind.FACTUAL:
-                    a = assess_mod.ClaimAssessmentIn if False else None
                     from vii.domain.schemas import ClaimAssessmentIn
                     a = ClaimAssessmentIn(claim_id=cid, status=ClaimStatus.UNVERIFIABLE,
                                           explanation=f"Non-factual statement ({c.kind}); not subject to evidence verification.",
                                           limitations="Opinion/satire/prediction/subjective content.",
                                           method="rules")
                 else:
-                    res = retrieval.search_claim(retrieval.claim_query(c.text), cid, st,
-                                                 None if demo else self.client)
+                    try:
+                        res = retrieval.search_claim(retrieval.claim_query(c.text), cid, st,
+                                                     None if demo else self.client)
+                    except Exception as e:
+                        # Optional-stage failure: assess from no evidence
+                        # with an explicit record instead of losing the
+                        # claim and everything already succeeded.
+                        search_failures += 1
+                        jobs.log(job_id, StageName.WEB_SEARCH,
+                                 f"{cid}: search failed ({type(e).__name__}: "
+                                 f"{str(e)[:200]}); assessing as insufficient",
+                                 "warning")
+                        res = {"results": [], "citations": [],
+                               "response_id": "", "performed": False,
+                               "offline": False,
+                               "note": ("evidence search failed; no sources "
+                                        "retrieved")}
+                    skipped = 0
                     for r in res["results"]:
+                        if not str(r.url or "").startswith(("http://", "https://")):
+                            skipped += 1  # invalid record: never persisted
+                            continue
                         repo.add_evidence(job_id, cid, r.url, r.title, r.snippet,
-                                          r.publisher or "", r.method.value, res["response_id"])
+                                          r.publisher or "", r.method.value, res["response_id"],
+                                          r.relationship or "", r.publication_date or "")
+                    if skipped:
+                        jobs.log(job_id, StageName.WEB_SEARCH,
+                                 f"{cid}: skipped {skipped} result(s) with "
+                                 "invalid URLs", "warning")
                     for cit in res["citations"]:
                         repo.add_citation(job_id, cid, cit.url, cit.cited_span,
                                           cit.start_index, cit.end_index, res["response_id"])
@@ -237,19 +270,62 @@ class Pipeline:
                 jobs.log(job_id, StageName.ORIGINALITY, f"frame sampling failed: {e}", "warning")
                 frames = []
             orig = orig_mod.assess_originality(media_path, Path(st.storage_dir) / "corpus", frames)
+            # Corpus write: record this media so later exact/near-duplicate
+            # checks have something to match against.
+            if orig.sha256:
+                try:
+                    import json as _json
+                    corpus_dir = Path(st.storage_dir) / "corpus"
+                    corpus_dir.mkdir(parents=True, exist_ok=True)
+                    (corpus_dir / f"{orig.sha256}.json").write_text(_json.dumps(
+                        {"sha256": orig.sha256, "phashes": orig.phashes,
+                         "job_id": job_id}))
+                except Exception as e:
+                    jobs.log(job_id, StageName.ORIGINALITY,
+                             f"corpus write failed: {e}", "warning")
             forensic = forensics_mod.assess_manipulation(media_path, frames, meta)
             # Alignment: media_origin must not keep claiming no detector
-            # ran once forensics have — embed the forensic detector text.
+            # ran once forensics have, embed the forensic detector text.
             origin.detector_used = forensic.detector_used
             jobs.log(job_id, StageName.ORIGINALITY,
                      f"manipulation forensics: status={forensic.status} "
                      f"signals={[(s.name, s.status) for s in forensic.signals]}")
 
+            # ---- I2. spam-format screening (needs summary+transcript+claims)
+            spam = self._detect_spam(job_id, vu, tr, all_claims, demo, jobs)
+
             # ---- J. report ----
+            capabilities["video_understanding"] = "success"
+            capabilities["visual_perception"] = str(
+                visual_state.get("status", "disabled"))
+            engine = getattr(tr, "engine", "")
+            if engine in ("transcription-unsupported", "no-audio-stream"):
+                capabilities["transcription"] = "unavailable"
+            elif engine.startswith(("transcribe-error",
+                                     "transcription-audio-too-large")):
+                capabilities["transcription"] = "failed"
+            elif engine in ("transcription-disabled-by-config",):
+                capabilities["transcription"] = "not_configured"
+            elif getattr(tr, "offline", False) and not demo and \
+                    engine == "transcription-unavailable":
+                capabilities["transcription"] = "unavailable"
+            else:
+                capabilities["transcription"] = "success"
+            if demo:
+                capabilities["evidence_search"] = "unavailable"
+            elif search_failures:
+                capabilities["evidence_search"] = "partial"
+            else:
+                capabilities["evidence_search"] = "success"
+            capabilities["ai_detection"] = str(
+                ai_detection.get("status", "disabled"))
+            capabilities["spam_detection"] = str(
+                spam.get("status", "disabled"))
             jobs.set_status(job, JobStatus.REPORTING)
             payload = self._report(job_id, job.title, vu, tr, all_claims, assessments,
                                    origin, orig, demo, repo, jobs,
-                                   visual_observations, visual_state, forensic)
+                                   visual_observations, visual_state, forensic,
+                                   capabilities, ai_detection, spam)
             jobs.set_status(job, JobStatus.SUCCEEDED)
             cb(job_id, JobStatus.SUCCEEDED, "Analysis complete.")
             return payload
@@ -333,16 +409,25 @@ class Pipeline:
         sha = sha256_file(info["path"])
         usable, converted, usable_sha = ingestion.ensure_mp4(
             info["path"], Path(st.storage_dir), st.ffmpeg_bin, sha)
+        # Fail-closed duration: an undeterminable duration never passes
+        # the length gate silently. inspect_local_media validates the
+        # container signature and enforces the cap when it can measure.
+        inspected = ingestion.inspect_local_media(
+            usable, st.max_upload_mb, st.max_video_seconds, st.ffprobe_bin)
         try:
             meta = ffmpeg_mod.metadata_summary(ffmpeg_mod.probe(usable, st.ffprobe_bin))
-            dur = meta.get("duration_s", 0)
-            if dur > st.max_video_seconds:
-                raise ValueError(f"video too long: {dur:.0f}s > {st.max_video_seconds}s")
-        except ValueError:
-            raise
         except Exception as e:
-            jobs.log(job_id, StageName.INGESTION, f"probe failed ({e}); continuing", "warning")
-            meta = {"format": "unknown", "duration_s": 0, "size_bytes": 0}
+            jobs.log(job_id, StageName.INGESTION, f"probe failed ({e})", "warning")
+            meta = {"format": inspected.container,
+                    "duration_s": inspected.duration_s or 0,
+                    "size_bytes": inspected.size_bytes}
+        dur = meta.get("duration_s") or inspected.duration_s
+        if not dur:
+            raise ValueError(
+                "video duration could not be determined locally; "
+                "failing closed instead of skipping the duration check")
+        if dur > st.max_video_seconds:
+            raise ValueError(f"video too long: {dur:.0f}s > {st.max_video_seconds}s")
         repo.add_source(job_id, kind, ref, sha,
                         {"container": meta, "converted": converted, "usable_sha": usable_sha})
         meth = AcquisitionMethod.FILE_ID if not demo else AcquisitionMethod.LOCAL_UPLOAD
@@ -418,7 +503,7 @@ class Pipeline:
 
         Returns (observations, state) where state is disabled / blocked /
         succeeded. A blocked optional stage is reported explicitly in the
-        job log and report — it never fabricates observations and never
+        job log and report, it never fabricates observations and never
         fails an otherwise valid analysis. In demo mode the hosted SAM
         provider is never called (live requests spend credits); the
         local provider still runs because it is free and offline.
@@ -464,6 +549,70 @@ class Pipeline:
         return observations, {"status": "succeeded", "provider": provider.name,
                               "model": provider.model}
 
+    def _detect_ai(self, job_id, media_path, demo, jobs) -> dict:
+        """Optional AI-generation detection over sampled frames.
+
+        Returns the assess_frames dict. Disabled by default; never runs
+        in demo mode; failures degrade to failed/unavailable without
+        touching other stages.
+        """
+        from vii.integrity import ai_detection as ai_mod
+
+        st = self.settings
+        if not st.enable_ai_detection:
+            return {"status": "disabled",
+                    "note": "AI detection not enabled"}
+        if demo:
+            jobs.log(job_id, StageName.ORIGINALITY,
+                     "demo mode: AI detection not run (would bill provider)",
+                     "warning")
+            return {"status": "blocked", "note": "demo mode: not run"}
+        if str(media_path).startswith(("http://", "https://")):
+            return {"status": "unavailable",
+                    "note": "remote URL media is not fetched for AI detection"}
+        try:
+            frames = ffmpeg_mod.sample_frames(
+                media_path, Path(st.storage_dir) / "tmp" / f"{job_id}_aidetect",
+                max_frames=max(1, st.ai_detection_samples))
+        except Exception as e:
+            jobs.log(job_id, StageName.ORIGINALITY,
+                     f"AI detection frame sampling failed: {e}", "warning")
+            return {"status": "failed",
+                    "note": f"frame sampling failed: {str(e)[:200]}"}
+        result = ai_mod.assess_frames(frames, self.client, st.meta_model,
+                                      max_frames=st.ai_detection_samples)
+        jobs.log(job_id, StageName.ORIGINALITY,
+                 f"AI detection: status={result['status']} "
+                 f"p={result.get('ai_probability')} "
+                 f"frames={result.get('frames_judged')}")
+        return result
+
+    def _detect_spam(self, job_id, vu, tr, all_claims, demo, jobs) -> dict:
+        """Spam-format screening over summary + transcript + claims.
+
+        Enabled by default for live runs (one extra provider call);
+        never runs in demo mode; failures degrade without touching
+        other stages.
+        """
+        from vii.integrity import spam as spam_mod
+
+        st = self.settings
+        if not st.enable_spam_detection:
+            return {"status": "disabled",
+                    "note": "spam detection not enabled"}
+        if demo:
+            return {"status": "blocked", "note": "demo mode: not run"}
+        summary = getattr(vu, "summary", "") or ""
+        transcript = " ".join(s.text for s in (getattr(tr, "segments", None)
+                                               or []))
+        claims = [c.text for c in all_claims]
+        result = spam_mod.assess_spam(summary, transcript, claims,
+                                      self.client, st.meta_model)
+        jobs.log(job_id, StageName.ORIGINALITY,
+                 f"spam detection: status={result['status']} "
+                 f"p={result.get('spam_probability')}")
+        return result
+
     def _transcribe(self, job_id, media_path, demo, repo, jobs) -> Transcript:
         st = self.settings
         if not demo and not st.enable_transcription:
@@ -504,7 +653,8 @@ class Pipeline:
 
     def _report(self, job_id, title, vu, tr, all_claims, assessments, origin, orig,
                 demo, repo, jobs, visual_observations=None, visual_state=None,
-                forensic=None) -> dict:
+                forensic=None, capabilities=None, ai_detection=None,
+                spam=None) -> dict:
         from vii.domain.schemas import DeepfakeAssessment
         from vii.reports.exporter import build_payload, export
         if forensic is None:
@@ -520,6 +670,10 @@ class Pipeline:
         for e in repo.evidence_for_job(job_id):
             sources_out.append({"url": e.url, "title": e.title, "snippet": e.snippet,
                                 "publisher": e.publisher, "method": e.method,
+                                "relationship": e.relationship or "",
+                                "publication_date": e.publication_date or "",
+                                "retrieved_at": (e.retrieved_at.isoformat()
+                                                 if e.retrieved_at else ""),
                                 "claim_id": e.claim_id})
         dims = {
             "claim_verification": [{"id": c["id"], "status": c["status"]} for c in claims_out],
@@ -540,7 +694,44 @@ class Pipeline:
         # Operational metadata lives OUTSIDE the five assessment dimensions
         # (AD-3): visual-perception state and provider usage are preserved
         # under payload["metadata"], never as extra dimensions.
+        caps = capabilities or {}
+        if caps.get("transcription") == "unavailable":
+            dims["uncertainty_limitations"].append(
+                "Transcription unavailable (provider does not support the "
+                "transcription request, or the media has no audio stream); "
+                "analysis continued without a transcript.")
+        if caps.get("transcription") == "failed":
+            dims["uncertainty_limitations"].append(
+                "Transcription failed; claims were assessed from video "
+                "understanding and retrieved evidence only.")
+        if caps.get("evidence_search") == "partial":
+            dims["uncertainty_limitations"].append(
+                "Evidence search failed for at least one claim; affected "
+                "claims were assessed as insufficient evidence.")
+        persisted = repo.evidence_for_job(job_id)
+        jobs.log(job_id, StageName.REPORT,
+                 f"evidence read-back: {len(persisted)} source(s) for job")
+        aid = ai_detection or {"status": "disabled"}
+        if aid.get("status") in ("success", "partial") and \
+                aid.get("ai_probability") is not None:
+            dims["uncertainty_limitations"].append(
+                f"AI-generation screening: mean AI-probability "
+                f"{aid['ai_probability']} across {aid.get('frames_judged', 0)} "
+                f"sampled frame(s), probabilistic evidence with measured "
+                f"error rates, not a real/fake verdict.")
+        spm = spam if isinstance(spam, dict) else {"status": "disabled"}
+        if spm.get("status") == "success" and \
+                spm.get("spam_probability") is not None:
+            flag = ("FLAGGED as likely mass-produced spam"
+                    if spm["spam_probability"] >= 0.7
+                    else "not flagged as mass-produced spam")
+            dims["uncertainty_limitations"].append(
+                f"Spam-format screening ({spm['spam_probability']}): {flag}. "
+                f"Signals: {'; '.join(spm.get('signals', [])[:5]) or 'none'}.")
         metadata = {
+            "capabilities": caps,
+            "ai_detection": aid,
+            "spam_detection": spm,
             "visual_perception": {
                 **(visual_state or {"status": "disabled"}),
                 "observations": [o.model_dump() for o in (visual_observations or [])],

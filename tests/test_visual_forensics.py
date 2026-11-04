@@ -1,6 +1,6 @@
 """Visual perception (local provider), manipulation forensics, Bug 1/3 regressions.
 
-Synthetic fixtures only — no provider calls, no credits, no real media.
+Synthetic fixtures only, no provider calls, no credits, no real media.
 Forensic assertions check categorical signals and limitations, never a
 genuine/fake verdict or probability.
 """
@@ -128,7 +128,7 @@ def test_client_assess_forensics_is_local_and_typed(tmp_path):
     from vii.config import Settings
     from vii.domain.schemas import DeepfakeAssessment
 
-    client = VII(settings=Settings(
+    client = VII(settings=Settings(_env_file=None,
         VII_DATABASE_URL=f"sqlite:///{tmp_path}/vii.db",
         VII_STORAGE_DIR=tmp_path))
     media = tmp_path / "clip.mp4"

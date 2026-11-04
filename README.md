@@ -1,112 +1,159 @@
 # Video Integrity Intelligence (VII)
 
-Evidence-first video intelligence: paste a public video URL or upload a local
-file → the video is understood natively → factual claims are extracted →
-evidence is retrieved with URL citations → every claim gets a status
-(**supported / contradicted / mixed / insufficient / unverifiable**) backed by
-cited sources. Five assessment dimensions stay separate — never one fake
-real/fake score.
+VII checks whether videos say things that are true. Give it a video file
+or a public video URL. It watches the video, pulls out factual claims,
+searches the live web for evidence with cited sources, and gives every
+claim a verdict: supported, contradicted, mixed, insufficient, or
+unverifiable. It also transcribes speech, screens for AI generated
+frames, and flags mass produced spam formats.
 
-API-first modular monolith (FastAPI + SQLAlchemy), with an optional PySide6
-desktop UI. VII is **online-first**: real provider-backed analysis is the
-default, and a missing `MODEL_API_KEY` fails provider-backed analysis with a
-typed `ProviderConfigurationError` — it never substitutes fixtures. A
-synthetic demo is available only as an explicit opt-in (`VII_DEMO_MODE=true`
-or `--demo`) and is labeled synthetic in every output.
+VII never outputs a single real/fake score. Every finding shows its
+evidence.
 
-## Quick start
+## Install (clean machine)
 
-```bash
-pip install -e ".[dev]"        # add ,desktop for the PySide6 UI
-cp .env.example .env           # set MODEL_API_KEY for real analysis
-./scripts/run_demo.sh          # explicit SYNTHETIC demo (fixtures, not analysis)
-./scripts/run_api.sh           # FastAPI on http://127.0.0.1:8765 (docs: /docs)
-./scripts/run_ui.sh            # desktop app (provider-backed; demo only if opted in)
-python3 -m pytest tests/ -q    # mocked tests only; no credits spent
+Prerequisites: Python 3.12 or newer, plus system ffmpeg and ffprobe.
+
+```text
+git clone <repo url>
+cd video_integrity_intelligence
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[app,mcp]"
+cp .env.example .env
 ```
 
-## Library usage
+Put your provider key in `.env` as `MODEL_API_KEY`. Then verify:
 
-VII is installable as a Python library; the public API is the set of
-names exported from `vii` (see `vii.__all__`). Internal packages are
-implementation details. A core install (`pip install .`) carries only
-the lightweight runtime dependencies; server, database, provider, and
-media extras are declared separately in `pyproject.toml`
-(`.[app]`, `.[api]`, `.[db]`, `.[provider]`, `.[media]`).
+```text
+.venv/bin/vii credentials status
+.venv/bin/python -m pytest tests/ -q
+```
 
-Local operations need no API key, server, database, or network:
+The suite runs 255 tests with mocked providers, so verification spends
+no credits. Desktop UI users add the desktop extra at install time.
+
+## Use it: terminal UI (recommended)
+
+```text
+.venv/bin/vii tui
+```
+
+The TUI asks for your media folder, then you talk to it:
+
+```text
+list videos
+check the hoax video
+details 2
+```
+
+A fast local screen appears in under a second (file facts, forensics,
+originality). The deep analysis streams live stage progress after that.
+Slash commands: /key /folder /mode /output /ai /check /status /help.
+
+## Use it: one shot CLI
+
+```text
+.venv/bin/vii check <video> --quick
+.venv/bin/vii check <video>
+.venv/bin/vii check <video> --json > result.json
+```
+
+Exit codes: 0 success, 2 bad input, 3 key missing, 4 provider failure.
+
+## Credentials
+
+Two secret kinds exist. Keep them apart:
+
+1. `MODEL_API_KEY` is the provider credential (Meta Model API). Used
+   only for provider backed analysis.
+2. `VII_API_KEYS` and `VII_CONSUMER_KEYS` authenticate callers of the
+   VII API server. They never call the provider.
+
+Lookup order, first match wins: environment or `.env` value, then OS
+keyring, then its permission 0600 fallback file. Manage it safely:
+
+```text
+.venv/bin/vii credentials set
+.venv/bin/vii credentials status
+.venv/bin/vii credentials remove
+.venv/bin/vii credentials test
+```
+
+Status and diagnostics never display secret values.
+
+## Use it: Python library
 
 ```python
-from vii import VII
+from vii import VII, VideoChecker
 
-client = VII()  # configuration from environment / .env
-info = client.inspect_media("sample.mp4")   # validate + signature + SHA-256
-digest = client.sha256("sample.mp4")
-originality = client.assess_originality("sample.mp4")  # local corpus check
-report = client.validate_dataset()  # data/dataset.csv or DATASET_CSV_PATH
+client = VII(api_key="YOUR_KEY_HERE")
+fast = client.quick_look("video.mp4")
+report = client.analyze("video.mp4")
+
+checker = VideoChecker(api_key="YOUR_KEY_HERE")
+cached = checker.check("video.mp4")
+print(checker.follow_up(cached, "contradicted"))
 ```
 
-Provider-backed analysis is explicit and runs only when called; it
-uses the configured database/storage and raises
-`ProviderConfigurationError` when no key is configured instead of
-returning fabricated results:
+Caller supplied keys never touch VII environment files. Repeated
+checks of the same file reuse a SHA 256 hash cache instead of rebilling.
 
-```python
-client = VII(api_key="YOUR_API_KEY")
-result = client.analyze("sample.mp4")  # or a public http(s) media URL
+## Use it: agent tools (MCP server)
+
+For Claude Code, OpenClaw, and other agents:
+
+```text
+.venv/bin/vii-mcp
 ```
 
-Integrity results report what was actually checked (hashes, corpus
-matches, cited evidence) — they never prove a video is genuine.
-Downstream applications and a future CLI should consume this public
-API rather than importing `vii.api`, `vii.application`, or other
-internal modules.
+Register once in Claude Code with `claude mcp add vii` pointing at
+that binary. Available tools: `vii_quick_look`, `vii_check`,
+`vii_follow_up`, `vii_key_status`. Agents pass their own key per call.
 
-## Dataset
+## Use it: API server
 
-Drop a real dataset at **`data/dataset.csv`** (or set `DATASET_CSV_PATH`),
-then validate it — the app runs fine before the file exists and never starts
-analysis on its own:
-
-```bash
-python3 -m vii.main --validate-dataset          # schema + row-error report
-python3 -m vii.main --ingest-dataset --apply    # register into the inbox
+```text
+./scripts/run_api.sh
 ```
 
-Schema and workflow: [docs/DATASET.md](docs/DATASET.md). Template:
-`data/dataset.example.csv`.
+Serves FastAPI on 127.0.0.1:8765 with interactive docs at /docs.
+Contract details live in docs/API.md.
 
-## Live Meta mode (optional, unverified in this environment)
+## What a check produces
 
-```bash
-# .env
-MODEL_API_KEY=sk-...
-META_BASE_URL=https://api.meta.ai/v1
-META_MODEL=muse-spark-1.3
-META_TRANSCRIPTION_MODEL=muse-voice-transcribe-1.0
-```
+1. Claims with verdicts plus cited evidence URLs
+2. Claim vs reality narrative per claim
+3. Transcript with speaker turns
+4. AI generation probability over sampled frames
+5. Spam format score with named signals
+6. Originality and forensics findings
+7. Per capability ledger (success, partial, unavailable, failed)
 
-URL input is sent via `input_video`/`video_url`; local files via the Files
-API (`file_id`); evidence via `web_search` with persisted `url_citation`s.
-Live behavior is covered by mocks in tests — run the opt-in checks in
-[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) with a real key before relying on it.
+## Datasets
+
+1. Real world pilot: 14 videos, 20972 frames indexed, under
+   data/evaluation/real_world_pilot, with reproducible builders
+2. AI detection: 975 labeled images plus a measured 40 sample eval
+   under data/evaluation/ai_detection
+3. Operator CSV inbox: drop a file at data/dataset.csv, then validate
+   and ingest through the documented workflow in docs/DATASET.md
 
 ## Documentation
 
-| Doc | Contents |
-|---|---|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Boundaries, dependency direction, data/job flow, decisions |
-| [docs/TECH_STACK.md](docs/TECH_STACK.md) | Selected technologies and rejected alternatives |
-| [docs/API.md](docs/API.md) | `/v1` contract, auth, errors, dataset endpoints |
-| [docs/DATASET.md](docs/DATASET.md) | CSV schema, validation, ingestion, evaluation workflow |
-| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Setup, testing, linting, migrations |
-| [docs/SECURITY.md](docs/SECURITY.md) | Auth, isolation, SSRF/upload/webhook boundaries |
+1. docs/ARCHITECTURE.md: boundaries, data flow, decisions
+2. docs/TECH_STACK.md: chosen technologies and rejected options
+3. docs/API.md: /v1 contract, auth, errors
+4. docs/DATASET.md: CSV schema and evaluation workflow
+5. docs/DEVELOPMENT.md: setup, testing, linting, migrations
+6. docs/SECURITY.md: auth, isolation, SSRF and upload boundaries
 
 ## Layout
 
-`src/vii/` — `config.py` · `domain/` (Pydantic contracts) · `persistence/`
-(SQLAlchemy + repositories; Alembic migrations) · `meta/` (provider adapter) ·
-`media/` (ingestion, SSRF guard, ffmpeg, hashing) · `evidence/` ·
-`verification/` · `integrity/` · `dataset/` (CSV) · `reports/` · `api/`
-(FastAPI `/v1` + deprecated legacy) · `application/` (pipeline, worker) ·
-`ui/` (optional desktop).
+Source lives under src/vii. Major areas: config, domain (typed
+contracts), persistence (SQLAlchemy plus Alembic migrations), meta
+(provider adapter), media (ingestion, guards, ffmpeg, hashing),
+evidence, verification, integrity (forensics, AI, spam), dataset,
+reports, api (FastAPI /v1), application (pipeline, worker), checker
+and client (library), tui and cli (terminal), mcp_server (agent
+tools), ui (optional desktop).
