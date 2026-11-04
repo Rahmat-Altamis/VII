@@ -14,7 +14,8 @@ which ffmpeg ffprobe
 
 Notes on the commands above. The dev extra includes the full app plus
 tests plus Ruff. Install runs offline from the committed wheelhouse
-(CPython 3.14, Linux or Windows). Add the desktop extra for the
+(CPython 3.14, Linux; the bundled Windows wheels are unsupported).
+Add the desktop extra for the
 PySide6 UI, online only. Set
 MODEL_API_KEY in `.env` for real online first analysis. The ffmpeg and
 ffprobe binaries are required for local file probing.

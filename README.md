@@ -12,16 +12,17 @@ evidence.
 
 ## Install (clean machine)
 
-Prerequisites: Python 3.14, plus system ffmpeg and ffprobe
-(Linux: your package manager, for example `dnf install ffmpeg`;
-Windows: `winget install Gyan.FFmpeg`, then reopen the terminal).
+VII is Linux oriented. Linux is the supported platform; all commands
+below assume it. Other systems may work but are on their own.
 
-Every library ships inside the repo under `wheelhouse/` (Linux plus
-Windows wheels, about 170 MB), so install needs no package index and
-never surprises you with new versions. Clone is bigger, installs are
-predictable.
+Prerequisites: Python 3.14, plus system ffmpeg and ffprobe from your
+package manager, for example `dnf install ffmpeg` or
+`apt install ffmpeg`.
 
-Linux or macOS:
+Every library ships inside the repo under `wheelhouse/` (about
+170 MB), so install needs no package index and never surprises you
+with new versions. Clone is bigger, installs are predictable. Windows
+wheels are included as an unsupported convenience.
 
 ```text
 git clone https://github.com/Rahmat-Altamis/VII.git
@@ -31,31 +32,16 @@ source .venv/bin/activate
 pip install --no-index --find-links=wheelhouse -e ".[app,mcp]"
 ```
 
-Windows Command Prompt:
-
-```text
-git clone https://github.com/Rahmat-Altamis/VII.git
-cd VII
-python -m venv .venv
-.venv\Scripts\activate.bat
-pip install --no-index --find-links=wheelhouse -e ".[app,mcp]"
-```
-
-Windows PowerShell: same steps, but activate with
-`.venv\Scripts\Activate.ps1` (if PowerShell blocks it, run
-`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once first).
-
 No network at all after the clone: the flags above forbid index
 access. Two exceptions. The desktop UI extra stays online only
 (`pip install -e ".[desktop]"`), because one PySide6 wheel alone tops
 the GitHub single file limit. And the wheelhouse targets CPython
-3.14; other Python versions or macOS fall back to the plain online
-install (`pip install -e ".[app,mcp]"`). Regenerate the bundle with
+3.14; other Python versions fall back to the plain online install
+(`pip install -e ".[app,mcp]"`). Regenerate the bundle with
 `scripts/build_wheelhouse.sh` after any dependency change.
 
-With the venv activated, every command below shortens to plain `vii`
-on all systems. Without activation, Linux and macOS use
-`.venv/bin/vii` while Windows uses `.venv\Scripts\vii.exe`.
+With the venv activated, every command below shortens to plain `vii`.
+Without activation, prefix with `.venv/bin/`.
 
 Then start the app and add your key inside it. No hidden files needed:
 
@@ -160,22 +146,8 @@ For Claude Code, OpenClaw, and other agents:
 Register once in Claude Code. Run this from your VII folder, no
 editing needed, it finds the path itself:
 
-Linux or macOS:
-
 ```text
 claude mcp add vii "$(pwd)/.venv/bin/vii-mcp"
-```
-
-Windows PowerShell:
-
-```text
-claude mcp add vii "$PWD\.venv\Scripts\vii-mcp.exe"
-```
-
-Windows Command Prompt:
-
-```text
-claude mcp add vii "%CD%\.venv\Scripts\vii-mcp.exe"
 ```
 
 Prefer config files? The same command above writes the entry for you,
