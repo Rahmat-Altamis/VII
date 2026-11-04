@@ -59,7 +59,7 @@ shows it again. Verify with `/status` inside the TUI.
 
 Developers can still use a `.env` file (`cp .env.example .env`, then
 set `MODEL_API_KEY`) or run `.venv/bin/vii credentials set`. The test
-suite (`.venv/bin/python -m pytest tests/ -q`, 255 tests, mocked
+suite (`.venv/bin/python -m pytest tests/ -q`, 261 tests, mocked
 providers) spends no credits. Desktop UI users add the desktop extra
 at install time.
 
@@ -69,23 +69,45 @@ to text on Muse Voice, plus evidence search through the Meta built in
 web search tool). No Exa, no Tavily, no extra search key. One Meta key
 unlocks every online feature.
 
+## Demo video
+
+Watch VII check a real video end to end:
+[demo video](https://drive.google.com/file/d/1no7FS-QZ9sD_320NfPA0TnDlZ2QZg5Lh/view?usp=sharing)
+
 ## Use it: terminal UI (recommended)
 
 ```text
 .venv/bin/vii tui
 ```
 
-The TUI asks for your media folder, then you talk to it:
+Step by step the first time:
 
-```text
-list videos
-check the hoax video
-details 2
-```
+1. Media folder. The TUI asks where your videos live and suggests
+   `~/Downloads`. Press Enter to accept, or type another path such as
+   `~/Videos`, then Enter. Change it later with `/folder` (prints the
+   current one) or `/folder ~/Videos` (switches, then relists).
+2. List. Type `list videos` (or `list`, `show`, `browse`). Every video
+   file in the folder appears with a number. That numbered list is
+   what the pick commands below refer to.
+3. Check. Type `check number 3`, or `check the hoax video` (fuzzy name
+   match), or just `3`. The TUI confirms the file, asks permission
+   before spending provider credits on a live check, then runs.
+4. Read. A fast local screen appears in about a second (file facts,
+   forensics, originality). The deep analysis streams live stage
+   progress after that, then prints one verdict block per claim: what
+   the video says, evidence found, reality check, key sources, and
+   why this verdict.
+5. Follow up. The report stays in memory. Ask `details` for every
+   claim, `details 2` for one claim, or questions like `contradicted`
+   and `sources`. Run `/check` or pick another video for a new check.
 
-A fast local screen appears in under a second (file facts, forensics,
-originality). The deep analysis streams live stage progress after that.
-Slash commands: /key /folder /mode /output /ai /check /status /help.
+Handy extras: `/mode demo` runs a free synthetic check to learn the
+ropes (labeled, spends nothing), `/mode live` switches back.
+`/ai on` adds AI frame screening to the next check. `/output json`
+prints machine readable reports. `/status` shows key source plus
+readiness. `/key set` stores the key, `/key test` verifies it live.
+`/help` lists everything, `/quit` exits. Anything unclear, just ask
+the TUI in words, it answers and suggests the command.
 
 ## Use it: one shot CLI
 
