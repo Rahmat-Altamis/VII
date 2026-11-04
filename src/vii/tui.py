@@ -59,6 +59,34 @@ def _settings(base: Settings | None, session: Session) -> Settings:
                                 "ai_detection_samples": session.ai_samples})
 
 
+def _looks_like_key(text: str) -> bool:
+    """True for a pasted secret like token. Never true for commands."""
+    import re as _re
+
+    t = text.strip()
+    if text.startswith("/") or len(t) < 20 or len(t) > 256:
+        return False
+    if any(ch.isspace() for ch in t):
+        return False
+    if t.startswith(("http://", "https://")) or "/" in t:
+        return False
+    return bool(_re.fullmatch(r"[A-Za-z0-9_\-.:+/=]+", t))
+
+
+def _offer_save_pasted_key(text: str, session: Session,
+                           base: Settings | None) -> None:
+    """Offer to store a pasted token. Never echoes the token."""
+    from vii.keystore import store_api_key
+
+    answer = input("That looks like an API key. Save it as your Meta "
+                   "provider key? (yes/no): ").strip().lower()
+    if answer not in ("y", "yes"):
+        print("Not saved. Paste it again anytime, or run /key set.")
+        return
+    s = base if base is not None else _settings(None, session)
+    print(f"stored via {store_api_key(text.strip(), s.storage_dir)}")
+
+
 def cmd_key(args: list[str], session: Session,
             base: Settings | None) -> int:
     from vii import cli as cli_mod
@@ -67,6 +95,9 @@ def cmd_key(args: list[str], session: Session,
     if action not in ("status", "set", "remove", "test"):
         print(f"unknown /key action {action!r}; use status|set|remove|test")
         return 2
+    if not args and not _settings(base, session).has_api_key:
+        print("No provider key yet. Let's add it now.")
+        action = "set"
     if action == "set":
         key = getpass.getpass("Provider API key (input hidden): ").strip()
         if not key:
@@ -505,6 +536,10 @@ def chat(text: str, session: Session, base: Settings | None) -> None:
         return
     if chat_llm(text, session, base):
         return
+    if _looks_like_key(text):
+        print("I never repeat things that look like API keys. Paste it "
+              "again to save it, or run /key set.")
+        return
     print(f"I'm not sure what '{text.strip()}' means. Try 'list videos', "
           "'check <name>', or /help for every command.")
 
@@ -579,7 +614,7 @@ def status_line(session: Session, base: Settings | None) -> str:
                          timeout=3).stdout.strip() or "no-git"
     except Exception:
         branch = "?"
-    return (f", {s.meta_model} · {folder} · "
+    return (f"{s.meta_model} · {folder} · "
             f"{'demo' if session.demo else 'live'}"
             f"{' · ai' if session.ai_on else ''} · {branch}")
 
@@ -590,6 +625,9 @@ def handle(line: str, session: Session, base: Settings | None) -> int | None:
 
     text = line.strip()
     if not text:
+        return None
+    if _looks_like_key(text):
+        _offer_save_pasted_key(text, session, base)
         return None
     if not text.startswith("/"):
         from pathlib import Path as _Path

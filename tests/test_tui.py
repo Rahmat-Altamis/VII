@@ -231,3 +231,69 @@ def test_demo_check_through_tui_keeps_report(tmp_path, capsys):
     assert session.report is not None
     assert handle("claims", session, s) is None  # follow-up, no re-check
     assert "Eiffel Tower" in capsys.readouterr().out
+
+
+def test_bare_key_when_unconfigured_goes_to_set(tmp_path, monkeypatch,
+                                                capsys):
+    from vii import keystore as ks
+    from vii.tui import Session, handle
+
+    monkeypatch.setattr(ks, "load_api_key", lambda d: "")
+    stored = {}
+
+    def fake_store(k, d):
+        stored["k"] = k
+        return "fallback-file (mode 0600)"
+
+    monkeypatch.setattr(ks, "store_api_key", fake_store)
+    monkeypatch.setattr("getpass.getpass",
+                        lambda prompt="": "posted-fake-key-0123456789")
+    assert handle("/key", Session(), _settings(tmp_path)) is None
+    out = capsys.readouterr().out
+    assert stored.get("k") == "posted-fake-key-0123456789"
+    assert "posted-fake-key" not in out and "stored via" in out
+
+
+def test_pasted_key_offers_save_without_echo(tmp_path, monkeypatch,
+                                             capsys):
+    from vii import keystore as ks
+    from vii.tui import Session, handle
+
+    monkeypatch.setattr(ks, "load_api_key", lambda d: "")
+    stored = {}
+
+    def fake_store(k, d):
+        stored["k"] = k
+        return "keyring"
+
+    monkeypatch.setattr(ks, "store_api_key", fake_store)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "yes")
+    token = "AbCdEfGh1234567890XyZqWvBnM7kL"
+    assert handle(token, Session(), _settings(tmp_path)) is None
+    out = capsys.readouterr().out
+    assert stored.get("k") == token
+    assert token not in out and "stored via" in out
+
+
+def test_pasted_key_declined_is_not_stored(tmp_path, monkeypatch,
+                                           capsys):
+    from vii import keystore as ks
+    from vii.tui import Session, handle
+
+    monkeypatch.setattr(ks, "load_api_key", lambda d: "")
+
+    def fail_store(k, d):
+        raise AssertionError("declined key must not be stored")
+
+    monkeypatch.setattr(ks, "store_api_key", fail_store)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "no")
+    token = "ZzYyXxWw99887766554433221100Qq"
+    assert handle(token, Session(), _settings(tmp_path)) is None
+    assert token not in capsys.readouterr().out
+
+
+def test_status_line_has_no_leading_comma(tmp_path):
+    from vii.tui import Session, status_line
+
+    line = status_line(Session(), _settings(tmp_path))
+    assert not line.startswith(",") and "muse-spark-1.3" in line
