@@ -69,10 +69,10 @@ to text on Muse Voice, plus evidence search through the Meta built in
 web search tool). No Exa, no Tavily, no extra search key. One Meta key
 unlocks every online feature.
 
-## Demo video
+## video example
 
-Watch VII check a real video end to end:
-[demo video](https://drive.google.com/file/d/1no7FS-QZ9sD_320NfPA0TnDlZ2QZg5Lh/view?usp=sharing)
+example video, implementing fake and real info in a video:
+[example video](https://drive.google.com/file/d/1no7FS-QZ9sD_320NfPA0TnDlZ2QZg5Lh/view?usp=sharing)
 
 ## Use it: terminal UI (recommended)
 
