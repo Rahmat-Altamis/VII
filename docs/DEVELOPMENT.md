@@ -3,7 +3,8 @@
 ## Setup
 
 ```bash
-cd video_integrity_intelligence
+git clone https://github.com/Rahmat-Altamis/VII.git
+cd VII
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"

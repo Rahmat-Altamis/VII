@@ -15,8 +15,8 @@ evidence.
 Prerequisites: Python 3.12 or newer, plus system ffmpeg and ffprobe.
 
 ```text
-git clone <repo url>
-cd video_integrity_intelligence
+git clone https://github.com/Rahmat-Altamis/VII.git
+cd VII
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[app,mcp]"
