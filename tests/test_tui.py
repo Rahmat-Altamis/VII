@@ -297,3 +297,41 @@ def test_status_line_has_no_leading_comma(tmp_path):
 
     line = status_line(Session(), _settings(tmp_path))
     assert not line.startswith(",") and "muse-spark-1.3" in line
+
+
+def test_concurrent_init_db_on_fresh_file(tmp_path):
+    import threading
+
+    from vii.persistence.db import init_db
+
+    url = f"sqlite:///{tmp_path}/race.db"
+    errors = []
+
+    def worker():
+        try:
+            init_db(url, tmp_path)
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    from sqlalchemy import create_engine, inspect
+
+    assert "analysis_jobs" in inspect(create_engine(url)).get_table_names()
+
+
+def test_try_number_runs_video_pick(tmp_path, monkeypatch, capsys):
+    import vii.tui as tui_mod
+    from vii.tui import Session, handle
+
+    called = {}
+    monkeypatch.setattr(tui_mod, "cmd_check",
+                        lambda src, session, base: called.setdefault("src", src))
+    session = Session()
+    session.video_pick = ["/vids/a.mp4", "/vids/b.mp4"]
+    assert handle("try 2", session, _settings(tmp_path)) is None
+    assert called.get("src") == "/vids/b.mp4"

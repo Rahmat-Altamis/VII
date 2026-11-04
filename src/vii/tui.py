@@ -448,8 +448,8 @@ def chat(text: str, session: Session, base: Settings | None) -> None:
         print(f"Checking {path} ...")
         cmd_check(path, session, base)  # stay in session either way
 
-    # pick by number ("number 3", "3", "check 3")
-    m = _re.fullmatch(r"(?:check\s+)?(?:number\s+)?(\d{1,3})", low)
+    # pick by number ("number 3", "3", "check 3", "try 3")
+    m = _re.fullmatch(r"(?:check\s+|try\s+)?(?:number\s+)?(\d{1,3})", low)
     if m and session.video_pick:
         idx = int(m.group(1)) - 1
         if 0 <= idx < len(session.video_pick):
@@ -460,7 +460,8 @@ def chat(text: str, session: Session, base: Settings | None) -> None:
         return
 
     # run verbs with a fuzzy name ("check the hoax video")
-    m = _re.match(r"(?:check|analyse|analyze|verify|test|run)\s+(.+)", low)
+    m = _re.match(r"(?:check|analyse|analyze|verify|test|run|try)\s+(.+)",
+                  low)
     if m and videos:
         names = [v.name for v in videos]
         hits = difflib.get_close_matches(m.group(1), names, n=1, cutoff=0.4)
