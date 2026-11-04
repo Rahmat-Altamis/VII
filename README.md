@@ -12,15 +12,50 @@ evidence.
 
 ## Install (clean machine)
 
-Prerequisites: Python 3.12 or newer, plus system ffmpeg and ffprobe.
+Prerequisites: Python 3.14, plus system ffmpeg and ffprobe
+(Linux: your package manager, for example `dnf install ffmpeg`;
+Windows: `winget install Gyan.FFmpeg`, then reopen the terminal).
+
+Every library ships inside the repo under `wheelhouse/` (Linux plus
+Windows wheels, about 170 MB), so install needs no package index and
+never surprises you with new versions. Clone is bigger, installs are
+predictable.
+
+Linux or macOS:
 
 ```text
 git clone https://github.com/Rahmat-Altamis/VII.git
 cd VII
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[app,mcp]"
+pip install --no-index --find-links=wheelhouse -e ".[app,mcp]"
 ```
+
+Windows Command Prompt:
+
+```text
+git clone https://github.com/Rahmat-Altamis/VII.git
+cd VII
+python -m venv .venv
+.venv\Scripts\activate.bat
+pip install --no-index --find-links=wheelhouse -e ".[app,mcp]"
+```
+
+Windows PowerShell: same steps, but activate with
+`.venv\Scripts\Activate.ps1` (if PowerShell blocks it, run
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once first).
+
+No network at all after the clone: the flags above forbid index
+access. Two exceptions. The desktop UI extra stays online only
+(`pip install -e ".[desktop]"`), because one PySide6 wheel alone tops
+the GitHub single file limit. And the wheelhouse targets CPython
+3.14; other Python versions or macOS fall back to the plain online
+install (`pip install -e ".[app,mcp]"`). Regenerate the bundle with
+`scripts/build_wheelhouse.sh` after any dependency change.
+
+With the venv activated, every command below shortens to plain `vii`
+on all systems. Without activation, Linux and macOS use
+`.venv/bin/vii` while Windows uses `.venv\Scripts\vii.exe`.
 
 Then start the app and add your key inside it. No hidden files needed:
 
@@ -122,23 +157,30 @@ For Claude Code, OpenClaw, and other agents:
 .venv/bin/vii-mcp
 ```
 
-Register once in Claude Code (absolute path to your install):
+Register once in Claude Code. Run this from your VII folder, no
+editing needed, it finds the path itself:
+
+Linux or macOS:
 
 ```text
-claude mcp add vii /home/YOU/VII/.venv/bin/vii-mcp
+claude mcp add vii "$(pwd)/.venv/bin/vii-mcp"
 ```
 
-Or add this JSON to your Claude Code MCP settings:
+Windows PowerShell:
 
-```json
-{
-  "mcpServers": {
-    "vii": {
-      "command": "/home/YOU/VII/.venv/bin/vii-mcp"
-    }
-  }
-}
+```text
+claude mcp add vii "$PWD\.venv\Scripts\vii-mcp.exe"
 ```
+
+Windows Command Prompt:
+
+```text
+claude mcp add vii "%CD%\.venv\Scripts\vii-mcp.exe"
+```
+
+Prefer config files? The same command above writes the entry for you,
+so manual JSON editing is never required. Verify with
+`claude mcp list`, then restart Claude Code if it was already running.
 
 Available tools: `vii_quick_look`, `vii_check`, `vii_follow_up`,
 `vii_key_status`. Agents pass their own Meta key per call through the
