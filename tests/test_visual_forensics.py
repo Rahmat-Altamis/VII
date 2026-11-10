@@ -123,6 +123,280 @@ def test_forensics_distinct_frames_no_reuse(tmp_path):
     assert _signal(result, "frame_reuse").status == "no_signal"
 
 
+def _noise_frames(tmp_path: Path, seed: int, dependent: bool,
+                  size: int = 64, count: int = 3) -> list[Path]:
+    """Seeded gradient + noise fixtures.
+
+    ``dependent=True`` mimics camera capture (noise grows with
+    luminance); ``dependent=False`` mimics flat synthetic output (tiny
+    uniform noise on a smooth gradient). Deterministic across runs.
+    """
+    import random
+
+    Image = pytest.importorskip("PIL.Image", reason="Pillow not installed")
+    frames = []
+    for i in range(count):
+        rng = random.Random(seed + i)
+        img = Image.new("L", (size, size))
+        px = img.load()
+        for y in range(size):
+            for x in range(size):
+                if dependent:
+                    base = int(20 + 200 * x / (size - 1))
+                    amp = 2 + int(base / 40)
+                else:
+                    base = int(60 + 120 * x / (size - 1))
+                    amp = 1
+                px[x, y] = max(0, min(255, base + rng.randrange(-amp, amp + 1)))
+        p = tmp_path / f"noise_{seed}_{i:03d}.png"
+        img.convert("RGB").save(p)
+        frames.append(p)
+    return frames
+
+
+def _jpeg_frames(frames: list[Path], quality: int = 70) -> list[Path]:
+    """Simulate one re-encode generation: JPEG round-trip, kept as PNG."""
+    import io
+
+    Image = pytest.importorskip("PIL.Image", reason="Pillow not installed")
+    out = []
+    for fp in frames:
+        with Image.open(fp) as im:
+            buf = io.BytesIO()
+            im.convert("RGB").save(buf, "JPEG", quality=quality)
+            buf.seek(0)
+            with Image.open(buf) as reenc:
+                reenc.load()
+                target = fp.with_name(fp.stem + "_rq.png")
+                reenc.convert("RGB").save(target)
+                out.append(target)
+    return out
+
+
+def _periodic_frames(tmp_path: Path, seed: int, period: int = 4,
+                     amp: int = 40, size: int = 64,
+                     count: int = 3) -> list[Path]:
+    """Sine-pattern frames mimicking synthetic periodic structure."""
+    import math
+
+    Image = pytest.importorskip("PIL.Image", reason="Pillow not installed")
+    frames = []
+    for i in range(count):
+        img = Image.new("L", (size, size))
+        px = img.load()
+        phase = seed * 0.01 + i * 0.7
+        for y in range(size):
+            for x in range(size):
+                v = 128 + int(amp * math.sin(
+                    2 * math.pi * x / period + phase))
+                px[x, y] = max(0, min(255, v))
+        p = tmp_path / f"periodic_{seed}_{i:03d}.png"
+        img.convert("RGB").save(p)
+        frames.append(p)
+    return frames
+
+
+def _uniform_noise_frame(tmp_path: Path, name: str, seed: int,
+                         size: int = 64) -> Path:
+    import random
+
+    Image = pytest.importorskip("PIL.Image", reason="Pillow not installed")
+    rng = random.Random(seed)
+    img = Image.new("L", (size, size))
+    px = img.load()
+    for y in range(size):
+        for x in range(size):
+            px[x, y] = rng.randrange(256)
+    p = tmp_path / name
+    img.convert("RGB").save(p)
+    return p
+
+
+def _wav(tmp_path: Path, name: str, kind: str) -> Path:
+    """2s 16kHz mono WAV: ``room`` (speech bursts + varying floor) or
+    ``clean`` (bursts + digital silence). Deterministic."""
+    import math
+    import random
+    import struct
+    import wave
+
+    rate, dur = 16000, 2.0
+    n = int(rate * dur)
+    rng = random.Random(99)
+    out = []
+    for i in range(n):
+        t = i / rate
+        burst = (0.5 <= t < 0.8) or (1.3 <= t < 1.6)
+        if burst:
+            v = (int(8000 * math.sin(2 * math.pi * 440 * t))
+                 + rng.randrange(-500, 501))
+        elif kind == "room":
+            env = 180 + int(60 * math.sin(2 * math.pi * t / dur))
+            v = rng.randrange(-env, env + 1)
+        else:
+            v = 0
+        out.append(max(-32768, min(32767, v)))
+    p = tmp_path / name
+    with wave.open(str(p), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(rate)
+        wav.writeframes(struct.pack(f"<{n}h", *out))
+    return p
+
+
+def test_forensics_camera_like_noise_no_pixel_signal(tmp_path):
+    from vii.integrity.forensics import assess_manipulation
+
+    frames = _noise_frames(tmp_path, seed=20261110, dependent=True)
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"synthetic")
+    result = assess_manipulation(
+        media, frames, metadata={"format": "mp4", "video_codec": "h264"})
+    assert _signal(result, "reencode_layer").status == "no_signal"
+    assert _signal(result, "sensor_noise").status == "no_signal"
+    assert _signal(result, "light_bias").status == "no_signal"
+    assert _signal(result, "frequency_artifacts").status == "no_signal"
+    assert _signal(result, "temporal_flicker").status == "no_signal"
+    assert _signal(result, "audio_tone").status == "unavailable"
+
+
+def test_forensics_flat_uniform_noise_signals_and_no_verdict(tmp_path):
+    from vii.integrity.forensics import assess_manipulation
+
+    frames = _noise_frames(tmp_path, seed=303, dependent=False)
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"synthetic")
+    result = assess_manipulation(
+        media, frames, metadata={"format": "mp4", "video_codec": "h264"})
+    assert _signal(result, "reencode_layer").status == "no_signal"
+    assert _signal(result, "sensor_noise").status == "signal"
+    assert _signal(result, "light_bias").status == "signal"
+    assert _signal(result, "frequency_artifacts").status == "no_signal"
+    assert _signal(result, "temporal_flicker").status == "no_signal"
+    assert result.status == "signals_detected"
+    dumped = result.model_dump()
+    assert set(dumped) == {"status", "signals", "detector_used", "limitations"}
+    assert "confidence" not in str(dumped).lower()
+    assert "probability" not in str(dumped).lower()
+    assert result.status not in ("fake", "genuine", "real", "ai")
+
+
+def test_forensics_reencode_layer_discounts_pixel_signals(tmp_path):
+    from vii.integrity.forensics import assess_manipulation
+
+    plain = _noise_frames(tmp_path, seed=404, dependent=True)
+    frames = _jpeg_frames(plain)
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"synthetic")
+    result = assess_manipulation(media, frames, metadata={})
+    assert _signal(result, "reencode_layer").status == "signal"
+    # Step 1 fired: pixel tells are discounted, never trusted.
+    assert _signal(result, "sensor_noise").status == "unavailable"
+    assert "discount" in _signal(result, "sensor_noise").detail.lower()
+    assert _signal(result, "light_bias").status == "unavailable"
+    assert "discount" in _signal(result, "light_bias").detail.lower()
+    assert _signal(result, "frequency_artifacts").status == "unavailable"
+    assert "discount" in _signal(result, "frequency_artifacts").detail.lower()
+    # Temporal + audio survive compression: still evaluated under a layer.
+    assert _signal(result, "temporal_flicker").status == "no_signal"
+    assert _signal(result, "provenance_metadata").status == "signal"
+    assert result.status == "signals_detected"
+
+
+def test_forensics_new_signals_unavailable_without_frames(tmp_path):
+    from vii.integrity.forensics import assess_manipulation
+
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"synthetic")
+    result = assess_manipulation(media, [], metadata={"format": "mp4"})
+    assert _signal(result, "reencode_layer").status == "unavailable"
+    assert _signal(result, "sensor_noise").status == "unavailable"
+    assert _signal(result, "light_bias").status == "unavailable"
+    assert _signal(result, "frequency_artifacts").status == "unavailable"
+    assert _signal(result, "temporal_flicker").status == "unavailable"
+    assert _signal(result, "audio_tone").status == "unavailable"
+
+
+def test_forensics_periodic_spectrum_signals(tmp_path):
+    from vii.integrity.forensics import assess_manipulation
+
+    frames = _periodic_frames(tmp_path, seed=505)
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"synthetic")
+    result = assess_manipulation(
+        media, frames, metadata={"format": "mp4", "video_codec": "h264"})
+    assert _signal(result, "reencode_layer").status == "no_signal"
+    assert _signal(result, "frequency_artifacts").status == "signal"
+
+
+def test_forensics_flicker_mixed_frames_signal(tmp_path):
+    from vii.integrity.forensics import assess_manipulation
+
+    cam = _noise_frames(tmp_path, seed=606, dependent=True, count=2)
+    noisy = _uniform_noise_frame(tmp_path, "flick_noise.png", seed=607)
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"synthetic")
+    result = assess_manipulation(
+        media, [*cam, noisy],
+        metadata={"format": "mp4", "video_codec": "h264"})
+    assert _signal(result, "temporal_flicker").status == "signal"
+
+
+def test_forensics_flicker_needs_three_frames(tmp_path):
+    from vii.integrity.forensics import assess_manipulation
+
+    frames = _noise_frames(tmp_path, seed=608, dependent=True, count=2)
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"synthetic")
+    result = assess_manipulation(media, frames, metadata={"format": "mp4"})
+    assert _signal(result, "temporal_flicker").status == "unavailable"
+
+
+def test_forensics_audio_room_tone_present(tmp_path):
+    from vii.integrity.forensics import assess_manipulation
+
+    frames = _noise_frames(tmp_path, seed=609, dependent=True)
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"synthetic")
+    result = assess_manipulation(
+        media, frames, metadata={"format": "mp4", "has_audio": True},
+        audio_path=_wav(tmp_path, "room.wav", "room"))
+    assert _signal(result, "audio_tone").status == "no_signal"
+
+
+def test_forensics_audio_too_clean_signals_and_no_verdict(tmp_path):
+    from vii.integrity.forensics import assess_manipulation
+
+    frames = _noise_frames(tmp_path, seed=610, dependent=True)
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"synthetic")
+    result = assess_manipulation(
+        media, frames, metadata={"format": "mp4", "has_audio": True},
+        audio_path=_wav(tmp_path, "clean.wav", "clean"))
+    assert _signal(result, "audio_tone").status == "signal"
+    dumped = result.model_dump()
+    assert "confidence" not in str(dumped).lower()
+    assert "probability" not in str(dumped).lower()
+    assert result.status not in ("fake", "genuine", "real", "ai")
+
+
+def test_forensics_audio_unavailable_cases(tmp_path):
+    from vii.integrity.forensics import assess_manipulation
+
+    frames = _noise_frames(tmp_path, seed=611, dependent=True)
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"synthetic")
+    missing = assess_manipulation(media, frames, metadata={"format": "mp4"},
+                                  audio_path=tmp_path / "absent.wav")
+    assert _signal(missing, "audio_tone").status == "unavailable"
+    no_stream = assess_manipulation(
+        media, frames, metadata={"format": "mp4", "has_audio": False},
+        audio_path=_wav(tmp_path, "room.wav", "room"))
+    assert _signal(no_stream, "audio_tone").status == "unavailable"
+    assert "no audio stream" in _signal(no_stream, "audio_tone").detail.lower()
+
+
 def test_client_assess_forensics_is_local_and_typed(tmp_path):
     from vii import VII
     from vii.config import Settings

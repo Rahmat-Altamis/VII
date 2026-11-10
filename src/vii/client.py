@@ -140,20 +140,24 @@ class VII:
         self,
         media_path: str | Path,
         sample_frames: list[Path] | None = None,
+        audio_path: str | Path | None = None,
     ) -> DeepfakeAssessment:
         """Evaluate local manipulation-forensics signals for a file.
 
         Local only: no provider is contacted and no job is created.
         Reports categorical forensic signals (frame reuse,
-        recompression error, temporal transitions, provenance sparsity)
-        with explicit limitations. It never returns a genuine/fake
-        verdict or a probability, and "no signals" does not prove the
-        media is authentic. Remote URLs are not fetched; they return
-        an ``unavailable`` assessment.
+        recompression error, temporal transitions, re-encode/screen
+        layer, sensor-noise uniformity, light bias, spectral
+        concentration, temporal flicker, audio room tone, provenance
+        sparsity) with explicit limitations. It never returns a
+        genuine/fake verdict or a probability, and "no signals" does
+        not prove the media is authentic. Remote URLs are not fetched;
+        they return an ``unavailable`` assessment. ``audio_path`` is an
+        optional local WAV for the room-tone signal.
         """
         from vii.integrity.forensics import assess_manipulation
 
-        return assess_manipulation(media_path, sample_frames)
+        return assess_manipulation(media_path, sample_frames, None, audio_path)
 
     def validate_dataset(self, path: str | Path | None = None) -> ValidationReport:
         """Validate a dataset CSV with no side effects.
@@ -184,7 +188,9 @@ class VII:
 
         Samples real frames and runs them through the forensics
         ensemble (frame reuse, recompression error, temporal
-        transitions) plus perceptual-hash originality, media probing,
+        transitions, re-encode/screen layer, sensor-noise uniformity,
+        light bias, spectral concentration, temporal flicker, audio
+        room tone) plus perceptual-hash originality, media probing,
         and spam-format markers, then returns a plain dict. No job is
         created, no credits are spent, and nothing here is a
         genuine/fake verdict. Errors raise the same typed
@@ -213,7 +219,16 @@ class VII:
                            for s in probed.get("streams", [])]
             except Exception:
                 streams = []
-            forensic = self.assess_forensics(path, frames or None)
+            try:
+                from vii.media.ffmpeg import extract_audio_wav as _wav
+
+                audio = _wav(path, Path(tmpdir) / "forensic.wav",
+                             self.settings.ffmpeg_bin, sample_rate=16000,
+                             start_s=0.0, end_s=60.0)
+            except Exception:
+                audio = None
+            forensic = self.assess_forensics(path, frames or None,
+                                             audio_path=audio)
             orig = self.assess_originality(path, sample_frames=frames or None)
         finally:
             import shutil as _shutil

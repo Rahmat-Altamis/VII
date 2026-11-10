@@ -283,7 +283,17 @@ class Pipeline:
                 except Exception as e:
                     jobs.log(job_id, StageName.ORIGINALITY,
                              f"corpus write failed: {e}", "warning")
-            forensic = forensics_mod.assess_manipulation(media_path, frames, meta)
+            audio_wav = None
+            if is_local and getattr(tr, "engine", "") != "no-audio-stream":
+                try:
+                    audio_wav = ffmpeg_mod.extract_audio(
+                        media_path, Path(st.storage_dir) / "tmp" / f"{job_id}_forensic.wav",
+                        st.ffmpeg_bin)
+                except Exception as e:
+                    jobs.log(job_id, StageName.ORIGINALITY,
+                             f"forensic audio extraction failed: {e}", "warning")
+                    audio_wav = None
+            forensic = forensics_mod.assess_manipulation(media_path, frames, meta, audio_wav)
             # Alignment: media_origin must not keep claiming no detector
             # ran once forensics have, embed the forensic detector text.
             origin.detector_used = forensic.detector_used

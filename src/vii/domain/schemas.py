@@ -238,12 +238,18 @@ class DeepfakeAssessment(BaseModel):
     signals: list[ForensicSignal] = Field(default_factory=list)
     detector_used: str = (
         "local forensic signal ensemble (frame reuse, recompression "
-        "error, temporal transitions, provenance sparsity), no "
+        "error, temporal transitions, re-encode/screen layer, "
+        "sensor-noise uniformity, light bias, spectral concentration, "
+        "temporal flicker, audio room tone, provenance sparsity), no "
         "synthetic-media classifier was run")
     limitations: str = (
         "Signals are weak local proxies, not proof of manipulation or "
         "authenticity; platform re-encoding and ordinary editing fire "
-        "several of them on genuine media.")
+        "several of them on genuine media. A detected re-encode/screen "
+        "layer discounts pixel-level signals because it washes out "
+        "sensor fingerprints. Temporal flicker and audio room tone are "
+        "evaluated even under a re-encode layer; cuts, lighting "
+        "changes, and studio audio fire them on genuine media.")
 
 
 class JobProgress(BaseModel):
