@@ -226,3 +226,10 @@ evidence, verification, integrity (forensics, AI, spam), dataset,
 reports, api (FastAPI /v1), application (pipeline, worker), checker
 and client (library), tui and cli (terminal), mcp_server (agent
 tools), ui (optional desktop).
+
+
+<div align="center">
+  <sub>© 2026 Try Studio. All rights reserved.</sub>
+  <br>
+  <sub>This project is the intellectual property of Try Studio.</sub>
+</div>
